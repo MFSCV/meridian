@@ -38,6 +38,18 @@ test('workspace drives charts, drawings, alerts, replay, panels and preferences 
     assert.equal(get('theme').getAttribute('aria-label'), 'Use light theme');
     assert.ok(svg().querySelector('.price-line'));
 
+    // A narrow-to-wide resize preserves the visible history rather than adding empty chart space.
+    const host = chart().host;
+    let width = 320;
+    Object.defineProperty(host, 'clientWidth', { configurable: true, get: () => width });
+    chart().fit();
+    const narrow = chart().visible().map(bar => bar.time);
+    width = 1100;
+    chart().render();
+    assert.deepEqual(chart().visible().map(bar => bar.time), narrow);
+    delete host.clientWidth;
+    chart().fit();
+
     // The command palette supports filtering and dispatches existing controls from the keyboard.
     document.body.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'k', ctrlKey: true, bubbles: true }));
     assert.equal(document.activeElement, get('action-query'));

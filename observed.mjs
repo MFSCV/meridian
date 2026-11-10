@@ -1,12 +1,20 @@
 const timestamp = value => value.length === 10 ? value : new Date(value).toISOString().replace('T', ' ').replace('.000Z', ' UTC');
 const base = 'https://www.sec.gov/Archives/edgar/data/320193/';
-const sources = ['ecb', 'edgar'];
+const sources = new Set(['ecb', 'edgar']);
 
 async function refresh(key) {
   const status = document.getElementById(key + '-status');
   const body = document.getElementById(key + '-rows');
   try {
-    const response = await fetch('/api/' + key, { cache: 'no-store', signal: AbortSignal.timeout(15000) });
+    const response = await fetch('./api/' + key, { cache: 'no-store', signal: AbortSignal.timeout(15000) });
+    if (response.status === 404 && !body.children.length) {
+      const link = document.createElement('a');
+      link.href = 'https://meridian-market-workspace.plum-bee-4406.chatgpt.site/';
+      link.textContent = 'Open private Meridian';
+      status.replaceChildren('Live feed requires the Meridian server. ', link);
+      sources.delete(key);
+      return;
+    }
     if (!response.ok) throw new Error('Feed unavailable');
     const data = await response.json();
     if (data.status === 'unavailable') {
@@ -41,13 +49,13 @@ async function refresh(key) {
 const button = document.getElementById('refresh-feeds');
 let timer;
 async function refreshAll() {
-  if (button.disabled) return;
+  if (button.disabled || !sources.size) return;
   clearTimeout(timer);
   button.disabled = true;
-  try { await Promise.all(sources.map(refresh)); }
+  try { await Promise.all([...sources].map(refresh)); }
   finally {
-    button.disabled = false;
-    if (!document.hidden) timer = setTimeout(refreshAll, 60000);
+    button.disabled = sources.size === 0;
+    if (sources.size && !document.hidden) timer = setTimeout(refreshAll, 60000);
   }
 }
 button.addEventListener('click', refreshAll);

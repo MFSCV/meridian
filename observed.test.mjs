@@ -12,10 +12,12 @@ test('observed panels automatically refresh while visible and pause while hidden
   const pending = new Set();
   const calls = [];
   let hidden = false;
+  let staticHost = false;
   Object.defineProperty(window.document, 'hidden', { get: () => hidden });
   globalThis.document = window.document;
   globalThis.fetch = async path => {
     calls.push(path);
+    if (staticHost) return new Response(null, { status: 404 });
     return Response.json({
       status: 'available', observedAt: '2026-11-10', retrievedAt: '2026-11-10T17:00:00Z',
       rows: path.endsWith('ecb') ? [{ currency: 'USD', rate: '1.16' }] :
@@ -46,6 +48,12 @@ test('observed panels automatically refresh while visible and pause while hidden
     await drain();
     assert.equal(calls.length, 6);
     assert.match(window.document.getElementById('ecb-status').textContent, /Reference date 2026-11-10/);
+    staticHost = true;
+    for (const id of ['ecb-rows', 'edgar-rows']) window.document.getElementById(id).replaceChildren();
+    await [...pending][0]();
+    assert.equal(pending.size, 0);
+    assert.equal(window.document.getElementById('refresh-feeds').disabled, true);
+    assert.equal(window.document.querySelector('#ecb-status a').textContent, 'Open private Meridian');
   } finally {
     Object.assign(globalThis, original);
     window.close();
