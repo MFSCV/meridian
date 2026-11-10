@@ -1,26 +1,22 @@
 name: Publish workspace
 
-# Publishes the static workspace so that the project site opens directly on it.
+# Copies the static workspace to the gh-pages branch, which GitHub Pages serves,
+# so that the project site opens directly on the workspace.
 on:
   push:
     branches: [main]
   workflow_dispatch:
 
 permissions:
-  contents: read
-  pages: write
-  id-token: write
+  contents: write
 
 concurrency:
   group: pages
   cancel-in-progress: true
 
 jobs:
-  deploy:
+  publish:
     runs-on: ubuntu-latest
-    environment:
-      name: github-pages
-      url: ${{ steps.deploy.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -29,13 +25,15 @@ jobs:
           cache: npm
       - run: npm ci --ignore-scripts
       - run: npm test
-      - name: Collect the static files
+      - name: Publish the static files
         run: |
           mkdir _site
           cp index.html style.css app.mjs chart.mjs indicators.mjs market.mjs observed.mjs _site/
-      - uses: actions/configure-pages@v5
-      - uses: actions/upload-pages-artifact@v3
-        with:
-          path: _site
-      - id: deploy
-        uses: actions/deploy-pages@v4
+          touch _site/.nojekyll
+          cd _site
+          git init -q -b gh-pages
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -q -m "Publish the static workspace from main (${GITHUB_SHA::7})"
+          git push -q --force "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" gh-pages
