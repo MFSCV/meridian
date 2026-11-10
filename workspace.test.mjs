@@ -583,6 +583,8 @@ test('workspace drives charts, drawings, alerts, replay, panels and preferences 
     get('settings').click();
     get('live-toggle').click();
     assert.equal(workspace.live, null);
+    // The panel refresh that live prices schedule runs up to a second later; let it finish while the page still exists.
+    await new Promise(resolve => setTimeout(resolve, 1100));
   } finally {
     Object.assign(globalThis, network);
     window.close();
