@@ -17,5 +17,8 @@ jobs:
         with:
           node-version: 24
           cache: npm
+      - run: rustup target add wasm32-unknown-unknown
+      - run: cargo test --manifest-path rust/Cargo.toml --locked
+      - run: npm run build:rust
       - run: npm ci --ignore-scripts
       - run: npm test

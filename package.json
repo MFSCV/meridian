@@ -16,7 +16,8 @@
   },
   "scripts": {
     "start": "node --use-system-ca server.mjs",
-    "test": "node --test"
+    "test": "node --test",
+    "build:rust": "node tools/build-rust.mjs"
   },
   "devDependencies": {
     "jsdom": "26.1.0"

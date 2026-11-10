@@ -28,7 +28,7 @@ jobs:
       - name: Publish the static files
         run: |
           mkdir _site
-          cp index.html style.css app.mjs chart.mjs i18n.mjs indicators.mjs live.mjs market.mjs observed.mjs script.mjs _site/
+          cp index.html style.css app.mjs chart.mjs i18n.mjs indicators.mjs live.mjs market.mjs market-engine.mjs market-engine.wasm observed.mjs script.mjs _site/
           mkdir _site/locales
           cp locales/*.mjs _site/locales/
           touch _site/.nojekyll

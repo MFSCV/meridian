@@ -114,3 +114,19 @@ Contributions in any of these areas are welcome. Open an issue first for larger 
 ## License
 
 [Apache License 2.0](LICENSE). See [NOTICE](NOTICE).
+
+### Rust market engine
+
+The simulated OHLCV engine is written in Rust under `rust/`. It generates and aggregates bars for every chart interval. The browser loads the tracked `market-engine.wasm` artifact through a small JavaScript adapter. A normal checkout can run without installing Rust.
+
+To change or rebuild the engine, install Rust with the `wasm32-unknown-unknown` target, then run:
+
+```sh
+cargo test --manifest-path rust/Cargo.toml --locked
+npm run build:rust
+npm test
+```
+
+The build expects Cargo on PATH, or an absolute executable path in the CARGO environment variable. Commit the rebuilt WebAssembly artifact with the Rust source so the static and private deployments use the tested binary.
+
+Migration status: Rust runs the synthetic market engine. The browser UI, chart interactions, indicators, strategies, live data, local API and Sites Worker still use JavaScript. HTML, CSS and locale resources continue to provide the browser presentation and copy.

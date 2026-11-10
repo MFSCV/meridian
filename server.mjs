@@ -5,7 +5,8 @@ import { paperChecks } from './paper.mjs';
 
 const files = new Map([
   ['/', ['index.html', 'text/html']], ['/style.css', ['style.css', 'text/css']],
-  ...['app', 'chart', 'i18n', 'indicators', 'live', 'market', 'observed', 'script'].map(name => ['/' + name + '.mjs', [name + '.mjs', 'text/javascript']])
+  ['/market-engine.wasm', ['market-engine.wasm', 'application/wasm']],
+  ...['app', 'chart', 'i18n', 'indicators', 'live', 'market', 'market-engine', 'observed', 'script'].map(name => ['/' + name + '.mjs', [name + '.mjs', 'text/javascript']])
 ]);
 const feeds = createFeeds({ userAgent: process.env.MERIDIAN_SEC_USER_AGENT });
 const checkPaper = paperChecks();
@@ -27,7 +28,7 @@ createServer(async (req, res) => {
     const [file, type] = files.get(route) ?? [route.slice(1), 'text/javascript'];
     try {
       const body = await readFile(new URL(file, import.meta.url));
-      res.writeHead(200, { 'Content-Type': type + '; charset=utf-8' }).end(body);
+      res.writeHead(200, { 'Content-Type': type === 'application/wasm' ? type : type + '; charset=utf-8' }).end(body);
     } catch {
       res.writeHead(files.has(route) ? 500 : 404).end();
     }
