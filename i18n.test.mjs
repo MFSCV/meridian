@@ -23,6 +23,10 @@ test('workspace opens in the stored language and applies a shared link', async (
   };
   const original = Object.fromEntries(Object.keys(globals).map(key => [key, Object.getOwnPropertyDescriptor(globalThis, key)]));
   for (const [key, value] of Object.entries(globals)) Object.defineProperty(globalThis, key, { value, configurable: true });
+  // Live data is on by default; nothing in this test reaches Binance or a local server.
+  const network = { fetch: globalThis.fetch, WebSocket: globalThis.WebSocket };
+  globalThis.fetch = async () => ({ ok: false, status: 503, json: async () => null });
+  globalThis.WebSocket = class { close() {} };
   try {
     const { workspace } = await import('./app.mjs');
     const get = id => document.getElementById(id);
@@ -49,7 +53,11 @@ test('workspace opens in the stored language and applies a shared link', async (
     assert.equal(entries.length, 21);
     assert.deepEqual(entries.filter(entry => entry.getAttribute('aria-checked') === 'true').map(entry => entry.lang), ['pt-PT']);
     assert.equal(document.querySelector('.menu-heading').textContent, portuguese['Machine-translated, not yet reviewed']);
+    // Let the start-up requests settle before the page goes away.
+    workspace.broker.stop();
+    for (let turn = 0; turn < 6; turn += 1) await new Promise(resolve => setImmediate(resolve));
   } finally {
+    Object.assign(globalThis, network);
     window.close();
     for (const [key, descriptor] of Object.entries(original)) {
       if (descriptor) Object.defineProperty(globalThis, key, descriptor);
