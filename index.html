@@ -1,0 +1,142 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Meridian — Market Workspace</title>
+<meta name="description" content="Meridian is an open-source market charting workspace with drawing tools, indicators, layouts, alerts, replay and a screener. Chart prices are simulated.">
+<link rel="stylesheet" href="style.css">
+<script type="module" src="app.mjs"></script>
+<script type="module" src="observed.mjs"></script>
+</head>
+<body>
+<h1 class="sr-only">Meridian market workspace</h1>
+<header id="top" role="toolbar" aria-label="Chart toolbar"></header>
+<nav id="tools" aria-label="Drawing tools"></nav>
+<main id="stage">
+  <div id="replaybar" role="toolbar" aria-label="Bar replay" hidden>
+    <span class="chip">Replay</span>
+    <button id="replay-pick" type="button">Pick start</button>
+    <button id="replay-play" type="button">Play</button>
+    <button id="replay-step" type="button">Next bar</button>
+    <label>Speed <select id="replay-speed"><option value="1000">1×</option><option value="500">2×</option><option value="200">5×</option><option value="100">10×</option></select></label>
+    <button id="replay-exit" type="button">Exit replay</button>
+  </div>
+  <div id="drawbar" role="toolbar" aria-label="Selected drawing" hidden>
+    <label>Colour <input id="draw-color" type="color"></label>
+    <label>Width <select id="draw-width"><option>1</option><option>1.5</option><option>2</option><option>3</option><option>4</option></select></label>
+    <label>Line <select id="draw-dash"><option value="solid">Solid</option><option value="dash">Dashed</option><option value="dot">Dotted</option></select></label>
+    <button id="draw-delete" type="button">Delete</button>
+  </div>
+  <div id="charts"></div>
+</main>
+<div id="bottom" role="toolbar" aria-label="Time range and scale"></div>
+<aside id="panel" aria-label="Side panel">
+  <div id="panel-grip" role="separator" aria-orientation="vertical" aria-label="Resize side panel" tabindex="0"></div>
+  <section data-panel="watch" aria-labelledby="watch-title">
+    <header class="panel-head"><h2 id="watch-title">Watchlist</h2><button id="watch-add" type="button">Add symbol</button></header>
+    <div class="columns" aria-hidden="true"><span>Symbol</span><span>Last</span><span>Chg%</span><span></span></div>
+    <div id="symbols"></div>
+    <div id="details"></div>
+  </section>
+  <section data-panel="alerts" aria-labelledby="alerts-title" hidden>
+    <header class="panel-head"><h2 id="alerts-title">Alerts</h2><button id="alert-new" type="button">Create alert</button></header>
+    <p class="hint">Alerts are checked on this device against simulated bars, when a bar replay advances and when they are created.</p>
+    <div id="alert-list"></div>
+    <h3>Log</h3>
+    <div id="alert-log"></div>
+  </section>
+  <section data-panel="data" aria-labelledby="data-title" hidden>
+    <header class="panel-head"><h2 id="data-title">Data window</h2><button id="export" type="button">Export CSV</button></header>
+    <dl id="window"></dl>
+    <h3>Object tree</h3>
+    <div id="objects"></div>
+    <details><summary>Visible bars</summary>
+      <div class="table-wrap"><table><thead><tr><th scope="col">Time</th><th scope="col">Open</th><th scope="col">High</th><th scope="col">Low</th><th scope="col">Close</th><th scope="col">Volume</th></tr></thead><tbody id="data"></tbody></table></div>
+    </details>
+  </section>
+  <section data-panel="screener" aria-labelledby="screener-title" hidden>
+    <header class="panel-head"><h2 id="screener-title">Screener</h2></header>
+    <div class="filters">
+      <label>Type <select id="screen-type"><option value="">All</option><option>Stock</option><option>ETF</option><option>Crypto</option><option>Forex</option><option>Commodity</option></select></label>
+      <label>Move <select id="screen-move"><option value="">All</option><option value="up">Gainers</option><option value="down">Losers</option></select></label>
+      <label>RSI <select id="screen-rsi"><option value="">All</option><option value="high">Above 70</option><option value="low">Below 30</option></select></label>
+    </div>
+    <div class="table-wrap tall"><table id="screen"><thead><tr></tr></thead><tbody></tbody></table></div>
+  </section>
+  <section data-panel="script" aria-labelledby="script-title" hidden>
+    <header class="panel-head"><h2 id="script-title">Formula editor</h2></header>
+    <p class="hint">Write one expression, or a script with assignments, plot lines and buy when and sell when rules. It runs on this device only.</p>
+    <label>Name <input id="script-name" value="Momentum" maxlength="24"></label>
+    <label>Formula or script <textarea id="script-source" rows="7" spellcheck="false">close - sma(close, 20)</textarea></label>
+    <label class="check"><input type="checkbox" id="script-overlay"> Draw on the price pane</label>
+    <div class="ticket"><button id="script-add" type="button" class="primary">Add to chart</button><button id="script-test" type="button">Run backtest</button></div>
+    <p id="script-error" role="alert"></p>
+    <div id="backtest" aria-live="polite"></div>
+    <h3>Examples</h3>
+    <div id="script-examples"></div>
+    <h3>Reference</h3>
+    <p class="hint" id="script-help"></p>
+  </section>
+  <section data-panel="trade" aria-labelledby="trade-title" hidden>
+    <header class="panel-head"><h2 id="trade-title">Paper trading</h2><button id="trade-reset" type="button">Reset account</button></header>
+    <p class="hint">Simulated account. No broker is connected and no order leaves this device. Limit and stop orders fill when a replay or a live feed moves through their price.</p>
+    <dl id="account"></dl>
+    <div class="ticket">
+      <label>Order type <select id="trade-type"><option value="market">Market</option><option value="limit">Limit</option><option value="stop">Stop</option></select></label>
+      <label>Quantity <input id="trade-qty" type="number" min="0.0001" step="any" value="1"></label>
+      <label id="trade-price-field" hidden>Order price <input id="trade-price" type="number" min="0" step="any"></label>
+      <label class="half">Take profit <input id="trade-tp" type="number" min="0" step="any" placeholder="Optional"></label>
+      <label class="half">Stop loss <input id="trade-sl" type="number" min="0" step="any" placeholder="Optional"></label>
+      <button id="trade-buy" type="button" class="buy">Buy</button>
+      <button id="trade-sell" type="button" class="sell">Sell</button>
+    </div>
+    <h3>Positions</h3>
+    <div id="positions"></div>
+    <h3>Working orders</h3>
+    <div id="pending"></div>
+    <h3>Filled orders</h3>
+    <div id="orders"></div>
+  </section>
+  <section data-panel="insights" aria-labelledby="insights-title" hidden>
+    <header class="panel-head"><h2 id="insights-title">Insights</h2></header>
+    <p class="hint">A rule-based summary of the active chart. It is computed on this device, uses no AI model and is not investment advice.</p>
+    <div id="insights"></div>
+  </section>
+  <section data-panel="community" aria-labelledby="community-title" hidden>
+    <header class="panel-head"><h2 id="community-title">Share and community</h2></header>
+    <p class="hint">A share link contains your current charts and their drawings. Anyone who opens it sees the same layout; nothing is uploaded.</p>
+    <button id="share-copy" type="button" class="primary">Copy share link</button>
+    <button id="share-idea" type="button">Post this chart as an idea</button>
+    <p class="hint">Ideas, questions and chat happen in the project's GitHub Discussions. Posting needs a GitHub account.</p>
+    <p><a id="link-discussions" href="https://github.com/MFSCV/meridian/discussions" target="_blank" rel="noopener">Community discussions</a></p>
+    <p><a href="https://github.com/MFSCV/meridian/issues" target="_blank" rel="noopener">Report a problem or request a feature</a></p>
+    <p><a href="https://github.com/MFSCV/meridian/blob/main/CONTRIBUTING.md" target="_blank" rel="noopener">Contribute code or translations</a></p>
+    <h3>Move your workspace</h3>
+    <p class="hint">There are no accounts. To use your workspace on another device, export it to a file and import it there.</p>
+    <div class="ticket"><button id="workspace-export" type="button">Export workspace</button><button id="workspace-import" type="button">Import workspace</button></div>
+    <input id="workspace-file" type="file" accept="application/json,.json" hidden aria-label="Workspace file">
+  </section>
+  <section data-panel="sources" aria-labelledby="observed-title" hidden>
+    <header class="panel-head"><h2 id="observed-title">Official sources</h2><button id="refresh-feeds" type="button">Refresh</button></header>
+    <p class="hint">Observed data, kept apart from the simulated charts.</p>
+    <article class="feed"><h3>Euro reference rates</h3><p>Currency units per EUR · Daily reference observations</p>
+      <p><a href="https://www.ecb.europa.eu/stats/policy_and_exchange_rates/euro_reference_exchange_rates/html/index.en.html">Source: European Central Bank</a></p>
+      <p id="ecb-status" role="status">Loading ECB data…</p>
+      <div class="table-wrap"><table aria-label="ECB reference rates"><thead><tr><th scope="col">Currency</th><th scope="col">Rate per EUR</th></tr></thead><tbody id="ecb-rows"></tbody></table></div>
+    </article>
+    <article class="feed"><h3>Apple filings</h3><p>Recent filing metadata · Apple Inc. (AAPL)</p>
+      <p><a href="https://www.sec.gov/edgar/browse/?CIK=320193">Source: SEC EDGAR</a></p>
+      <p id="edgar-status" role="status">Loading EDGAR data…</p>
+      <div class="table-wrap"><table aria-label="Apple SEC filings"><thead><tr><th scope="col">Form</th><th scope="col">Filed</th><th scope="col">Record</th></tr></thead><tbody id="edgar-rows"></tbody></table></div>
+    </article>
+  </section>
+</aside>
+<nav id="rail" aria-label="Panels"></nav>
+<dialog id="dialog" aria-labelledby="dialog-title">
+  <header><h2 id="dialog-title"></h2><button id="dialog-close" type="button" aria-label="Close dialog">✕</button></header>
+  <div id="dialog-body"></div>
+</dialog>
+<div id="toasts" role="status" aria-live="polite"></div>
+</body>
+</html>
