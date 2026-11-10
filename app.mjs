@@ -790,12 +790,51 @@ function afterChange(kind) {
   renderPanel();
 }
 
+function quickActions() {
+  const primary = ['symbol', 'interval', 'style', 'indicators', 'compare', 'alert', 'replay',
+    'layout', 'layouts', 'snapshot', 'fullscreen', 'settings', 'language', 'theme'];
+  const controls = [...primary, ...panels.map(([name]) => 'panel-' + name)]
+    .map(id => $(id)).filter(control => control && !control.hidden);
+  const input = h('input', { type: 'search', id: 'action-query', placeholder: t('Find a workspace action'),
+    'aria-label': t('Find a workspace action') });
+  const results = h('div', { class: 'action-results', id: 'action-results' });
+  const choose = control => {
+    closeDialog();
+    control.focus();
+    control.click();
+  };
+  const fill = () => {
+    const query = input.value.trim().toLocaleLowerCase();
+    results.replaceChildren(...controls.filter(control =>
+      control.getAttribute('aria-label').toLocaleLowerCase().includes(query)
+    ).map(control => h('button', {
+      type: 'button', class: 'action-result', onclick: () => choose(control)
+    }, h('span', { text: control.getAttribute('aria-label') }), h('span', { text: '↗', 'aria-hidden': 'true' }))));
+    if (!results.children.length) results.append(hint(t('No matching actions.')));
+  };
+  input.oninput = fill;
+  input.onkeydown = event => {
+    if (event.key === 'ArrowDown' || event.key === 'Enter') {
+      const first = results.querySelector('button');
+      if (!first) return;
+      event.preventDefault();
+      if (event.key === 'Enter') first.click();
+      else first.focus();
+    }
+  };
+  dialog(t('Quick actions'), [input, results]);
+  fill();
+  input.focus();
+}
+
 // Toolbars.
 function build() {
   const gap = () => h('span', { class: 'gap' });
   const pickSymbol = query => symbolDialog(t('Symbol search'), item => active().set({ symbol: item.symbol }), { query });
   $('top').append(
-    h('a', { class: 'brand', href: './', 'aria-label': t('Meridian home') }, h('span', { class: 'mark', text: '◈' })),
+    h('a', { class: 'brand', href: './', 'aria-label': t('Meridian home') }, h('span', { class: 'mark', text: '◈', 'aria-hidden': 'true' }),
+      h('span', { class: 'wordmark', text: 'Meridian', 'aria-hidden': 'true' })),
+    button('quick-actions', { glyph: 'search', label: t('Quick actions'), text: t('Quick actions'), run: quickActions }),
     button('symbol', { glyph: 'search', label: t('Symbol search'), text: '', always: true, run: () => pickSymbol() }),
     button('compare', { glyph: 'compare', label: t('Compare symbols'), run: () => symbolDialog(t('Compare with {0}', active().state.symbol), item => {
       if (item.symbol !== active().state.symbol) active().toggleCompare(item.symbol);
@@ -921,6 +960,18 @@ function build() {
   );
 
   $('rail').append(...panels.map(([name, glyph, label]) => button('panel-' + name, { glyph, label: t(label), run: () => openPanel(name) })));
+  for (const section of $('panel').querySelectorAll('section[data-panel]')) {
+    const header = section.querySelector('.panel-head');
+    if (!header) continue;
+    const name = section.dataset.panel;
+    const close = button('close-panel-' + name, { label: t('Close'), run: () => {
+      openPanel(name);
+      $('panel-' + name).focus();
+    } });
+    close.className = 'panel-close';
+    close.textContent = '×';
+    header.append(close);
+  }
   return pickSymbol;
 }
 
@@ -1488,7 +1539,8 @@ function wire(pickSymbol) {
     const typing = event.target.closest?.('input, textarea, select, dialog, .menu');
     if ((event.ctrlKey || event.metaKey) && !typing) {
       const key = event.key.toLowerCase();
-      if (key === 'z' && !event.shiftKey) travel(past, future);
+      if (key === 'k') quickActions();
+      else if (key === 'z' && !event.shiftKey) travel(past, future);
       else if (key === 'y' || key === 'z') travel(future, past);
       else return;
       event.preventDefault();

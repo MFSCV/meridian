@@ -1,4 +1,7 @@
 export default {
+  "Find a workspace action": "Find a workspace action",
+  "No matching actions.": "No matching actions.",
+  "Quick actions": "Quick actions",
   "1 day": "1 دن",
   "1 day in 5 minute bars": "1 دن، 5 منٹ کے بارز میں",
   "1 hour": "1 گھنٹہ",
