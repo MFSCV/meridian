@@ -148,6 +148,7 @@ export function createChart(host, state, env) {
     const mainH = height - foot - used;
     host.classList.toggle('hide-legend', env.store.settings.legend === false);
     if (view.auto) view.width = Math.max(3, Math.min(8, plot / 90));
+    else if (geo?.plot > 0 && plot !== geo.plot) view.width *= plot / geo.plot;
     view.auto = false;
     if (view.end === null) view.end = total + 3;
     geo = { plot };
