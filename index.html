@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Meridian — Market Workspace</title>
-<meta name="description" content="Meridian is an open-source market charting workspace with drawing tools, indicators, layouts, alerts, replay and a screener. Chart prices are simulated.">
+<meta name="description" content="Meridian is an open-source market charting workspace with drawing tools, indicators, layouts, alerts, replay and a screener. Live crypto prices come from Binance; other charts are simulated.">
 <link rel="stylesheet" href="style.css">
 <script type="module" src="app.mjs"></script>
 <script type="module" src="observed.mjs"></script>
@@ -27,6 +27,10 @@
     <label>Width <select id="draw-width"><option>1</option><option>1.5</option><option>2</option><option>3</option><option>4</option></select></label>
     <label>Line <select id="draw-dash"><option value="solid">Solid</option><option value="dash">Dashed</option><option value="dot">Dotted</option></select></label>
     <button id="draw-delete" type="button">Delete</button>
+  </div>
+  <div id="engine-error" role="alert" hidden>
+    <span>The simulated data engine could not load. Live Binance charts still work.</span>
+    <button id="engine-retry" type="button">Try again</button>
   </div>
   <div id="charts"></div>
 </main>
@@ -79,7 +83,45 @@
     <p class="hint" id="script-help"></p>
   </section>
   <section data-panel="trade" aria-labelledby="trade-title" hidden>
-    <header class="panel-head"><h2 id="trade-title">Paper trading</h2><button id="trade-reset" type="button">Reset account</button></header>
+    <header class="panel-head"><h2 id="trade-title">Trading</h2><button id="trade-reset" type="button">Reset account</button></header>
+    <div class="tabs" role="group" aria-label="Trading account">
+      <button id="trade-paper" type="button" aria-pressed="true">Paper</button>
+      <button id="trade-binance" type="button" aria-pressed="false">Binance</button>
+    </div>
+    <div id="binance-pane" hidden>
+      <p class="hint" id="bn-note" role="status"></p>
+      <form id="bn-connect" class="ticket" autocomplete="off" hidden>
+        <label>API key <input id="bn-key" type="password" autocomplete="off" spellcheck="false" required></label>
+        <label>API secret <input id="bn-secret" type="password" autocomplete="off" spellcheck="false" required></label>
+        <label class="check"><input id="bn-testnet" type="checkbox"> Use the Binance futures testnet</label>
+        <button id="bn-submit" type="submit" class="primary">Connect Binance</button>
+        <p class="hint">Create the key in Binance under API Management with Futures trading enabled and withdrawals disabled, and restrict it to your IP address. The key is sent only to the Meridian server on this computer, which keeps it in memory until it stops.</p>
+      </form>
+      <div id="bn-live" hidden>
+        <dl id="bn-account"></dl>
+        <div class="ticket">
+          <label>Order type <select id="bn-type"><option value="market">Market</option><option value="limit">Limit</option><option value="stop">Stop loss</option><option value="takeProfit">Take profit</option><option value="trailing">Trailing stop</option></select></label>
+          <label>Quantity <input id="bn-qty" type="number" min="0" step="any"></label>
+          <label id="bn-price-field" hidden>Order price <input id="bn-price" type="number" min="0" step="any"></label>
+          <label id="bn-trigger-field" hidden>Trigger price <input id="bn-trigger" type="number" min="0" step="any"></label>
+          <label id="bn-callback-field" class="half" hidden>Callback rate % <input id="bn-callback" type="number" min="0.1" max="20" step="0.1" value="1"></label>
+          <label id="bn-activation-field" class="half" hidden>Activation price <input id="bn-activation" type="number" min="0" step="any" placeholder="Optional"></label>
+          <label id="bn-tp-field" class="half">Take profit <input id="bn-tp" type="number" min="0" step="any" placeholder="Optional"></label>
+          <label id="bn-sl-field" class="half">Stop loss <input id="bn-sl" type="number" min="0" step="any" placeholder="Optional"></label>
+          <label id="bn-reduce-field" class="check"><input id="bn-reduce" type="checkbox"> Reduce only</label>
+          <label class="half">Leverage <input id="bn-leverage" type="number" min="1" max="150" step="1"></label>
+          <label class="half">Margin <select id="bn-margin"><option value="CROSSED">Cross</option><option value="ISOLATED">Isolated</option></select></label>
+          <button id="bn-buy" type="button" class="buy">Buy</button>
+          <button id="bn-sell" type="button" class="sell">Sell</button>
+        </div>
+        <h3>Positions</h3>
+        <div id="bn-positions"></div>
+        <h3>Working orders</h3>
+        <div id="bn-orders"></div>
+        <p><button id="bn-disconnect" type="button">Disconnect Binance</button></p>
+      </div>
+    </div>
+    <div id="paper-pane">
     <p class="hint">Simulated account. No broker is connected and no order leaves this device. Limit and stop orders fill when a replay or a live feed moves through their price.</p>
     <dl id="account"></dl>
     <div class="ticket">
@@ -97,6 +139,7 @@
     <div id="pending"></div>
     <h3>Filled orders</h3>
     <div id="orders"></div>
+    </div>
   </section>
   <section data-panel="insights" aria-labelledby="insights-title" hidden>
     <header class="panel-head"><h2 id="insights-title">Insights</h2></header>

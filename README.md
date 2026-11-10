@@ -1,12 +1,12 @@
 # Meridian
 
-An open-source market charting workspace that runs entirely in the browser: charts, drawing tools, indicators, multi-chart layouts, alerts, bar replay, a screener, strategy scripts with backtesting and a simulated paper account.
+An open-source market charting and trading workspace that runs in the browser: charts, drawing tools, indicators, multi-chart layouts, alerts, bar replay, a screener, strategy scripts with backtesting, a simulated paper account and, when run on your own computer, your Binance futures account.
 
 **[Open the workspace](https://mfscv.github.io/meridian/)** · [Contribute](CONTRIBUTING.md) · [Roadmap](#roadmap)
 
 ![The Meridian workspace showing a candlestick chart, drawing tools and a watchlist](docs/workspace.jpg)
 
-> **Chart prices are simulated unless you turn on live data.** Meridian ships with deterministic synthetic data so that it works offline and has no data-licensing obligations. Live crypto prices are optional and come straight from Binance to your browser; see [Live data](#live-data). Nothing in Meridian is investment advice.
+> **Crypto charts are live; everything else is simulated.** Binance spot and perpetual futures prices come straight from Binance to your browser; see [Live data](#live-data). Stocks, ETFs, forex and gold use deterministic synthetic data, so those charts work offline and carry no data-licensing obligations. Orders sent from the Binance tab are real orders on your own account. Nothing in Meridian is investment advice.
 
 Meridian is an independent project. It is not affiliated with, endorsed by or derived from TradingView or any other charting vendor, and it contains none of their code or assets.
 
@@ -23,6 +23,7 @@ Meridian is an independent project. It is not affiliated with, endorsed by or de
 | Replay | Start from any bar, play at four speeds or step bar by bar |
 | Screener | Sortable table with type, direction and RSI filters |
 | Paper trading | Simulated account with market, limit and stop orders, optional take-profit and stop-loss, positions and order history |
+| Binance futures | With the local server: connect a USDⓈ-M futures account, see entry, break-even and liquidation prices and working orders on the chart, place market, limit, stop-loss, take-profit and trailing-stop orders, close, reverse or move the stop to break-even, set leverage and margin mode. See [docs/server.md](docs/server.md#binance-futures-account) |
 | Insights | A rule-based summary of the active chart: trend, momentum, volatility and range. No AI model is involved |
 | Sharing | Share links that carry the layout and drawings inside the link, a shortcut to post a chart to the project's Discussions, and workspace export and import |
 | Languages | English, plus 20 machine-translated locales that still need review. See [docs/localization.md](docs/localization.md) |
@@ -31,9 +32,9 @@ It has no build step, no framework and no runtime dependencies: plain HTML, CSS 
 
 ## Live data
 
-Live data is off by default. When you turn it on in Settings, your browser connects directly to Binance's public, key-less market data service and loads five spot pairs (BTC, ETH, SOL, BNB and XRP against USDT), then streams updates. Live symbols are labelled "Live" wherever they appear. Alerts and working paper orders on a live symbol are checked on each update while a chart of that symbol is open.
+Live data is on by default and can be turned off in Settings. Your browser connects directly to Binance's public, key-less market data services and loads spot pairs and USDⓈ-M perpetual futures (symbols ending in `.P`), then streams updates and reconnects when a stream drops. The main pairs are listed up front; symbol search finds every pair Binance lists. Live symbols are labelled "Live" wherever they appear. Alerts and working paper orders are checked against live prices as they arrive.
 
-Meridian does not relay, store or redistribute that data, and has no agreement with Binance. Your use of the data is subject to [Binance's terms](https://www.binance.com/en/terms). The project has not found published terms that clearly grant redistribution rights for any exchange feed, which is why no live feed is on by default and why adapters for other sources need documented rights before they are merged (see [CONTRIBUTING.md](CONTRIBUTING.md)).
+Meridian does not relay, store or redistribute that data, and has no agreement with Binance. Your use of the data is subject to [Binance's terms](https://www.binance.com/en/terms). The project has not found published terms that clearly grant redistribution rights for any exchange feed, which is why prices always travel from the exchange to your own browser and never through a Meridian server.
 
 ## Run it locally
 
@@ -90,7 +91,8 @@ Preferences, drawings, alerts, layouts and the paper account are stored in your 
 | `indicators.mjs` | Indicator maths and the indicator registry |
 | `script.mjs` | The formula and strategy language and the backtester |
 | `market.mjs` | Simulated instruments and price history |
-| `live.mjs` | Optional live data from Binance's public market data service |
+| `live.mjs` | Live spot and futures data from Binance's public market data services |
+| `broker.mjs`, `binance.mjs` | Binance futures account: the browser client and the adapter that runs in the local server |
 | `i18n.mjs`, `locales/` | Translation loader and one file per locale |
 | `tools/` | String extraction and locale coverage checks |
 | `observed.mjs`, `feeds.mjs` | Official sources panel and its server-side adapters |
@@ -107,7 +109,7 @@ Contributions in any of these areas are welcome. Open an issue first for larger 
 - **News and calendars,** from sources with rights to republish.
 - **Accounts and sync across devices,** and alerts that run when the browser is closed. Both need a server.
 - **An AI assistant.** It needs a model provider and a way to pay for it; the Insights panel is rule-based.
-- **Broker order routing.** The local server can only check that a paper account is reachable.
+- **Other brokers and other Binance products.** Order routing covers Binance USDⓈ-M futures only. Spot, margin, COIN-M futures and options accounts are not connected, and for Alpaca and Interactive Brokers the local server can only check that a paper account is reachable.
 - **More drawing tools and indicators,** with per-drawing styling.
 - **Accessibility.** The target is WCAG 2.2 AA. Controls are labelled and the chart is keyboard operable, but it has not been audited with assistive technology.
 

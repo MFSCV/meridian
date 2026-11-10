@@ -1,14 +1,16 @@
 // Workspace shell: toolbars, layouts, side panels, dialogs and persistence around the chart engine.
-import { instruments, liveInstruments, intervals, intervalLabel, find, series, price, csv, useLive } from './market.mjs';
+import { instruments, liveInstruments, intervals, intervalLabel, find, series, price, csv, useLive, registerLive, listedInstruments, engineError, loadEngine } from './market.mjs';
 import { registry, definition, rsi, sma, macd, atr } from './indicators.mjs';
 import { compileScript, backtest, formulaHelp } from './script.mjs';
 import { createChart, styles, paneOf, palette } from './chart.mjs';
-import { createLive, liveTerms } from './live.mjs';
+import { createLive, liveTerms, listSymbols } from './live.mjs';
+import { createBroker, futuresPair } from './broker.mjs';
 import { locales, locale, detect, useLocale, t, L, translateTree } from './i18n.mjs';
 
 const $ = id => document.getElementById(id);
 const view = document.defaultView;
 const KEY = 'meridian.v2';
+const SYMBOLS = 'meridian.binance.symbols';
 const REPO = 'https://github.com/MFSCV/meridian';
 
 function h(tag, props = {}, ...children) {
@@ -115,7 +117,7 @@ const toolGroups = [
 ];
 const drawingNames = Object.fromEntries([...toolGroups.flatMap(group => group.tools), ['position', L('Position')]]);
 const panels = [['watch', 'list', L('Watchlist and details')], ['alerts', 'alert', L('Alerts')], ['data', 'table', L('Data window and object tree')],
-  ['screener', 'filter', L('Screener')], ['script', 'code', L('Formulas and strategies')], ['trade', 'wallet', L('Paper trading')],
+  ['screener', 'filter', L('Screener')], ['script', 'code', L('Formulas and strategies')], ['trade', 'wallet', L('Trading')],
   ['insights', 'bulb', L('Insights')], ['community', 'share', L('Share and community')], ['sources', 'source', L('Official sources')]];
 const ranges = [['1D', 5, 288, L('1 day in 5 minute bars')], ['5D', 15, 480, L('5 days in 15 minute bars')], ['1M', 60, 720, L('1 month in 1 hour bars')],
   ['3M', 240, 540, L('3 months in 4 hour bars')], [L('All'), 1440, 144, L('All data in daily bars')]];
@@ -137,15 +139,17 @@ const strokes = { '': L('Default'), 1: '1', 2: '2', 3: '3', 4: '4' };
 const optional = [['compare', L('Compare symbols')], ['style', L('Chart type')], ['indicators', L('Indicators and formulas')], ['alert', L('Create alert')],
   ['replay', L('Bar replay')], ['undo', L('Undo drawing change')], ['redo', L('Redo drawing change')], ['layout', L('Layout setup')],
   ['layouts', L('Save and load layouts')], ['snapshot', L('Download chart image')], ['fullscreen', L('Full screen')]];
+const orderKinds = { market: L('Market'), limit: L('Limit'), stop: L('Stop loss'), stopLimit: L('Stop limit'), takeProfit: L('Take profit'),
+  takeProfitLimit: L('Take profit limit'), trailing: L('Trailing stop') };
 const isColor = value => typeof value === 'string' && /^#[0-9a-f]{6}$/i.test(value);
 
 // State and persistence.
-const chartDefaults = () => ({ symbol: 'SPY', interval: 1440, style: 'Candles', log: false, compare: [], indicators: [{ uid: 'volume', id: 'volume', params: { height: 18 } }] });
+const chartDefaults = () => ({ symbol: 'BTCUSDT.P', interval: 60, style: 'Candles', log: false, compare: [], indicators: [{ uid: 'volume', id: 'volume', params: { height: 18 } }] });
 const defaults = () => ({
   theme: null, locale: null, look: { accent: null, up: null, down: null, density: 'cozy' }, hidden: [], panelWidth: null, layout: '1', active: 0, charts: [chartDefaults()], panel: (view?.innerWidth ?? 1200) < 760 ? null : 'watch',
-  watchlist: ['SPY', 'QQQ', 'AAPL', 'NVDA', 'BTCUSD', 'ETHUSDT.P', 'EURUSD'], alerts: [], log: [], drawings: {}, saved: {},
+  watchlist: ['BTCUSDT.P', 'ETHUSDT.P', 'BTCUSDT', 'SPY', 'QQQ', 'AAPL', 'EURUSD'], alerts: [], log: [], drawings: {}, saved: {}, tradeAccount: 'paper',
   paper: { cash: 100000, positions: {}, orders: [], pending: [] },
-  settings: { tz: 'UTC', grid: true, magnet: false, keep: false, lock: false, hide: false, syncSymbol: false, syncInterval: false, syncCross: true, live: false,
+  settings: { tz: 'UTC', grid: true, magnet: false, keep: false, lock: false, hide: false, syncSymbol: false, syncInterval: false, syncCross: true, live: true, feed: 'binance', confirmOrders: true,
     priceLine: true, legend: true, crosshair: 'cross', drawColor: null, drawWidth: null, panelSide: 'right', tools: true, bottom: true }
 });
 const list = value => Array.isArray(value) ? value : [];
@@ -174,6 +178,9 @@ function normalize(saved) {
   if (!layouts[base.layout]) base.layout = '1';
   if (![null, 'light', 'dark'].includes(base.theme)) base.theme = null;
   if (!locales.some(item => item.tag === base.locale)) base.locale = null;
+  // Binance became the default data feed in 0.3: workspaces saved before that are switched over once.
+  if (base.settings.feed !== 'binance') Object.assign(base.settings, { live: true, feed: 'binance' });
+  if (base.tradeAccount !== 'binance') base.tradeAccount = 'paper';
   if (!zones[base.settings.tz]) base.settings.tz = 'UTC';
   if (!crosshairs[base.settings.crosshair]) base.settings.crosshair = 'cross';
   if (!sides[base.settings.panelSide]) base.settings.panelSide = 'right';
@@ -219,6 +226,12 @@ function load() {
   return normalize(saved);
 }
 
+// Binance pairs found by an earlier visit, so saved charts and watchlists keep working before the list is refreshed.
+try {
+  const known = JSON.parse(localStorage.getItem(SYMBOLS));
+  if (Array.isArray(known?.items)) registerLive(known.items);
+} catch {}
+
 let state = load();
 await useLocale(state.locale ?? detect().tag);
 document.documentElement.lang = locale.tag;
@@ -239,7 +252,23 @@ function save() {
   try { localStorage.setItem(KEY, JSON.stringify(state)); } catch {}
 }
 const active = () => charts[state.active] ?? charts[0];
-const universe = () => [...instruments, ...(state.settings.live ? liveInstruments : [])];
+// Instruments with loaded statistics: the simulated set, the main Binance pairs and any other pair on the watchlist.
+function universe() {
+  if (!state.settings.live) return instruments;
+  const extra = state.watchlist.map(find).filter(item => item?.live && !liveInstruments.includes(item));
+  const taken = new Set([...liveInstruments, ...extra].map(item => item.symbol));
+  return [...instruments.filter(item => !taken.has(item.symbol)), ...liveInstruments, ...extra];
+}
+// Latest list of every Binance pair, refreshed at most once a day.
+async function refreshSymbols() {
+  try {
+    if (Date.now() - (JSON.parse(localStorage.getItem(SYMBOLS))?.at ?? 0) < 86400000) return;
+  } catch {}
+  const items = await listSymbols();
+  if (!items.length) return;
+  registerLive(items);
+  try { localStorage.setItem(SYMBOLS, JSON.stringify({ at: Date.now(), items })); } catch {}
+}
 
 // Theme and formatting.
 const deviceTheme = matchMedia('(prefers-color-scheme: dark)');
@@ -321,7 +350,7 @@ function quote(symbol) {
   const chart = charts.find(item => item.state.symbol === symbol && item.replaying);
   if (chart) return chart.last().close;
   if (find(symbol).live) return live?.last(symbol)?.close ?? null;
-  return stats(find(symbol)).last;
+  return stats(find(symbol))?.last ?? null;
 }
 
 function toast(message) {
@@ -403,10 +432,13 @@ function symbolDialog(title, pick, { stay, query = '', simulatedOnly } = {}) {
   const results = h('div', { class: 'results', id: 'symbol-results' });
   const fill = () => {
     const words = input.value.trim().toLowerCase();
-    const found = universe().filter(item => (item.symbol + ' ' + item.name).toLowerCase().includes(words) &&
-      (!kind.value || item.type === kind.value) && !(simulatedOnly && item.live));
+    const main = universe();
+    const known = new Set(main.map(item => item.symbol));
+    const all = state.settings.live && !simulatedOnly ? [...main, ...listedInstruments().filter(item => !known.has(item.symbol))] : main;
+    const found = all.filter(item => (item.symbol + ' ' + item.name).toLowerCase().includes(words) &&
+      (!kind.value || item.type === kind.value) && !(simulatedOnly && item.live)).slice(0, 80);
     results.replaceChildren(...found.map(item => {
-      const data = stats(item);
+      const data = known.has(item.symbol) ? stats(item) : null;
       return h('button', { type: 'button', class: 'result', 'data-symbol': item.symbol, onclick: () => {
         if (!stay) closeDialog();
         pick(item);
@@ -715,7 +747,8 @@ function buildCharts() {
       store: state, colors, time, before, configure, t,
       tool: () => tool,
       toolDone: () => tool !== 'cursor' && setTool('cursor'),
-      status: chart => !find(chart.symbol).live ? null : !state.settings.live ? t('Live data is turned off. Turn it on in Settings.')
+      levels: accountLevels,
+      status: chart => !find(chart.symbol).live ? (engineError ? t('The simulated data engine could not load. Live Binance charts still work.') : null) : !state.settings.live ? t('Live data is turned off. Turn it on in Settings.')
         : live?.status(chart.symbol, chart.interval) === 'error' ? t('Live data is unavailable right now.') : t('Loading live data…'),
       askText: done => {
         const input = h('input', { type: 'text', id: 'note-text', maxlength: 60 });
@@ -1013,6 +1046,7 @@ function settingsDialog() {
       if (key === 'live' && control.checked) {
         for (const symbol of ['BTCUSDT', 'ETHUSDT']) if (!state.watchlist.includes(symbol)) state.watchlist.push(symbol);
         toast(t('Live symbols were added to your watchlist.'));
+        refreshSymbols();
       }
       propagate(active());
       afterChange();
@@ -1071,8 +1105,9 @@ function settingsDialog() {
     group(t('Side panels'), ...panels.map(([name, , label]) => shown('panel-' + name, t(label)))),
     group(t('Live data'),
       flag('live', t('Show live crypto prices from Binance'), 'live-toggle'),
-      hint(t('When this is on, your browser connects directly to the public market data service of Binance to load and stream prices for five crypto pairs. Meridian does not relay or store that data, and your use of it is subject to the terms of Binance.') + ' ',
-        h('a', { href: liveTerms, target: '_blank', rel: 'noopener', text: t('Binance terms') }))),
+      hint(t('When this is on, your browser connects directly to the public market data service of Binance to load and stream spot and perpetual futures prices. Meridian does not relay or store that data, and your use of it is subject to the terms of Binance.') + ' ',
+        h('a', { href: liveTerms, target: '_blank', rel: 'noopener', text: t('Binance terms') })),
+      flag('confirmOrders', t('Ask before sending each order to Binance'), 'confirm-orders')),
     group(t('Keyboard'),
       hint(t('Type a letter to search symbols. On a focused chart: arrow keys inspect bars, + and − zoom, Home and End jump, Delete removes the selected drawing, Escape cancels. Ctrl+Z and Ctrl+Y undo and redo drawings.')),
       hint(t('Up and Down move the price scale.'))),
@@ -1318,7 +1353,187 @@ function runBacktest() {
     report.open ? hint(t('A position opened on {0} is still open and is valued at the last close.', time(report.open.entryTime, 'full'))) : null);
 }
 
+// ── Binance account ──────────────────────────────────────────────────────────────────────────
+const broker = createBroker({ onChange: () => {
+  charts.forEach(chart => chart.render());
+  if (state.panel === 'trade') renderTrade();
+} });
+const pairPrice = (pair, value) => Number.isFinite(value) && value > 0 ? price(value, find(pair + '.P') ?? { digits: value < 1 ? 5 : 2 }) : '–';
+const usd = value => (Number.isFinite(value) ? value : 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' USDT';
+const positionName = position => t(position.amount > 0 ? 'Long' : 'Short') + ' ' + Math.abs(position.amount) + ' ' + position.symbol;
+const orderName = order => t(order.side === 'BUY' ? 'Buy' : 'Sell') + ' ' + (order.closePosition ? t('whole position') : order.quantity) + ' ' + order.symbol;
+// Profit and loss at the latest streamed price, falling back to the mark price Binance reported.
+function openProfit(position) {
+  const last = state.settings.live ? live?.last(position.symbol + '.P')?.close : null;
+  return last > 0 ? position.amount * (last - position.entry) : position.unrealized;
+}
+// Lines the chart draws for the connected account on a futures symbol.
+function accountLevels(symbol) {
+  const pair = futuresPair(symbol);
+  if (!pair || broker.state.status !== 'connected') return [];
+  const levels = [];
+  for (const order of broker.state.orders.filter(item => item.symbol === pair)) {
+    const level = order.trigger ?? order.price ?? order.activation;
+    if (!(level > 0)) continue;
+    levels.push({ price: level, tone: order.kind === 'limit' ? (order.side === 'BUY' ? 'up' : 'down') : order.kind.startsWith('takeProfit') ? 'up' : order.kind === 'trailing' ? 'alert' : 'down',
+      dash: '8 3 2 3', label: t(order.side === 'BUY' ? 'Buy' : 'Sell') + ' · ' + t(orderKinds[order.kind]) + (order.callback ? ' ' + order.callback + '%' : '') });
+  }
+  for (const position of broker.state.positions.filter(item => item.symbol === pair)) {
+    levels.push({ price: position.entry, tone: 'muted', dash: '2 3', label: positionName(position) + ' · ' + t('Entry') });
+    if (position.breakEven > 0 && position.breakEven !== position.entry) levels.push({ price: position.breakEven, tone: 'accent', dash: '5 3', label: t('Break-even') });
+    if (position.liquidation > 0) levels.push({ price: position.liquidation, tone: 'down', dash: '10 4', label: t('Liquidation') });
+  }
+  return levels;
+}
+// Sends one account action. Real orders are shown for approval first unless that is turned off in Settings.
+function brokerAction(summary, action, body, done) {
+  const run = async () => {
+    try {
+      await broker.act(action, body);
+      toast(done ?? t('Sent to Binance: {0}', summary));
+    } catch (problem) {
+      toast(t('Binance: {0}', problem.message));
+    }
+  };
+  if (!state.settings.confirmOrders) return run();
+  dialog(t('Send to Binance?'), [
+    h('p', { class: 'summary', id: 'bn-confirm-text', text: summary }),
+    hint(t(broker.state.mode === 'testnet' ? L('This goes to the Binance futures testnet. No real funds are used.') : L('This goes to your real Binance futures account and uses real funds.'))),
+    actions(h('button', { type: 'button', text: t('Cancel'), onclick: closeDialog }),
+      h('button', { type: 'button', class: 'primary', id: 'bn-confirm', text: t('Send to Binance'), onclick: () => {
+        closeDialog();
+        run();
+      } }))]);
+}
+function submitBinance(side) {
+  const pair = futuresPair(active().state.symbol);
+  if (!pair) return toast(t('Open a Binance perpetual futures chart (a symbol ending in .P) to trade it.'));
+  const value = id => $(id).value.trim();
+  const kind = $('bn-type').value;
+  const entry = kind === 'market' || kind === 'limit';
+  if (!(Number(value('bn-qty')) > 0)) return toast(t('Enter a quantity above zero.'));
+  const body = { symbol: pair, side: side > 0 ? 'BUY' : 'SELL', kind, quantity: value('bn-qty'), reduceOnly: entry ? $('bn-reduce').checked : true };
+  const parts = [t(side > 0 ? 'Buy' : 'Sell') + ' ' + value('bn-qty') + ' ' + pair, t(orderKinds[kind])];
+  if (kind === 'limit') {
+    if (!(Number(value('bn-price')) > 0)) return toast(t('Enter an order price above zero.'));
+    body.price = value('bn-price');
+    parts.push(t('Limit at {0}', value('bn-price')));
+  } else if (kind === 'stop' || kind === 'takeProfit') {
+    if (!(Number(value('bn-trigger')) > 0)) return toast(t('Enter a trigger price above zero.'));
+    body.triggerPrice = value('bn-trigger');
+    parts.push(t('Trigger price') + ' ' + value('bn-trigger'));
+  } else if (kind === 'trailing') {
+    body.callbackRate = value('bn-callback');
+    if (Number(value('bn-activation')) > 0) body.activatePrice = value('bn-activation');
+    parts.push(t('Callback rate %') + ' ' + value('bn-callback') + (body.activatePrice ? ' · ' + t('Activation price') + ' ' + body.activatePrice : ''));
+  }
+  if (entry) {
+    for (const [id, name, label] of [['bn-tp', 'takeProfit', L('Take profit')], ['bn-sl', 'stopLoss', L('Stop loss')]]) {
+      if (Number(value(id)) > 0) {
+        body[name] = value(id);
+        parts.push(t(label) + ' ' + value(id));
+      }
+    }
+  }
+  if (body.reduceOnly) parts.push(t('Reduce only'));
+  brokerAction(parts.join(' · '), 'order', body);
+}
+// Take profit, stop loss and trailing stop for an open position; each closes the whole position.
+function exitsDialog(position) {
+  const closing = position.amount > 0 ? 'SELL' : 'BUY';
+  const input = (id, more = {}) => h('input', { type: 'number', min: 0, step: 'any', id, placeholder: t('Optional'), ...more });
+  const [takeProfit, stopLoss, callback] = [input('bn-exit-tp'), input('bn-exit-sl'), input('bn-exit-callback', { min: 0.1, max: 20, step: 0.1 })];
+  dialog(t('Exits for {0}', positionName(position)), [
+    hint(t('Entry') + ' ' + pairPrice(position.symbol, position.entry) + ' · ' + t('Break-even') + ' ' + pairPrice(position.symbol, position.breakEven) + ' · ' +
+      t('Liquidation') + ' ' + pairPrice(position.symbol, position.liquidation)),
+    field(t('Take profit'), takeProfit), field(t('Stop loss'), stopLoss), field(t('Trailing stop') + ' · ' + t('Callback rate %'), callback),
+    actions(h('button', { type: 'button', class: 'primary', id: 'bn-exit-save', text: t('Place exits'), onclick: async () => {
+      const base = { symbol: position.symbol, side: closing, positionSide: position.side === 'BOTH' ? undefined : position.side };
+      const jobs = [];
+      if (Number(takeProfit.value) > 0) jobs.push([t('Take profit') + ' ' + takeProfit.value, { ...base, kind: 'takeProfit', triggerPrice: takeProfit.value, closePosition: true }]);
+      if (Number(stopLoss.value) > 0) jobs.push([t('Stop loss') + ' ' + stopLoss.value, { ...base, kind: 'stop', triggerPrice: stopLoss.value, closePosition: true }]);
+      if (Number(callback.value) > 0) jobs.push([t('Trailing stop') + ' ' + callback.value + '%', { ...base, kind: 'trailing', callbackRate: callback.value, quantity: Math.abs(position.amount), reduceOnly: true }]);
+      closeDialog();
+      for (const [label, body] of jobs) {
+        try {
+          await broker.act('order', body);
+          toast(t('Sent to Binance: {0}', label));
+        } catch (problem) {
+          toast(t('Binance: {0}', label + ' — ' + problem.message));
+        }
+      }
+    } }))]);
+}
+function renderBinance() {
+  const status = broker.state.status;
+  const connected = status === 'connected';
+  $('bn-connect').hidden = connected || status === 'no_server' || status === 'unknown';
+  $('bn-live').hidden = !connected;
+  const notes = {
+    unknown: L('Checking the Binance connection…'),
+    no_server: L('Connecting a Binance account needs Meridian running on your own computer (npm start). This hosted copy shows live prices only.'),
+    not_configured: L('Connect your Binance account to see your futures positions on the chart and manage orders from here.'),
+    authorization_required: L('Binance refused the API key. Check the key, its Futures permission and its IP restriction.'),
+    unavailable: L('Binance could not be reached. Try again in a moment.')
+  };
+  $('bn-note').replaceChildren(...[connected ? t('Connected to Binance USDⓈ-M futures.') : t(notes[status]) + (broker.state.message && status !== 'not_configured' && status !== 'no_server' ? ' ' + broker.state.message : ''),
+    connected && h('span', { class: 'badge' + (broker.state.mode === 'live' ? ' live' : ''), text: t(broker.state.mode === 'live' ? L('Real account') : L('Testnet')) }),
+    connected && broker.state.hedge && h('span', { class: 'badge', text: t('Hedge mode') })].filter(Boolean));
+  if (!connected) return;
+  const { account, positions, orders } = broker.state;
+  const profit = positions.reduce((sum, position) => sum + openProfit(position), 0);
+  $('bn-account').replaceChildren(...pairs([[t('Wallet balance'), usd(account?.wallet)], [t('Available'), usd(account?.available)],
+    [t('Open profit and loss'), usd(profit), tone(profit)], [t('Margin balance'), usd((account?.wallet ?? 0) + profit)]]));
+  const pair = futuresPair(active().state.symbol);
+  const kind = $('bn-type').value;
+  const entry = kind === 'market' || kind === 'limit';
+  for (const [id, shown] of [['bn-price-field', kind === 'limit'], ['bn-trigger-field', kind === 'stop' || kind === 'takeProfit'], ['bn-callback-field', kind === 'trailing'],
+    ['bn-activation-field', kind === 'trailing'], ['bn-tp-field', entry], ['bn-sl-field', entry], ['bn-reduce-field', entry]]) $(id).hidden = !shown;
+  $('bn-buy').textContent = pair ? t('Buy {0}', pair) : t('Buy');
+  $('bn-sell').textContent = pair ? t('Sell {0}', pair) : t('Sell');
+  $('bn-buy').disabled = $('bn-sell').disabled = !pair;
+  const held = positions.find(position => position.symbol === pair);
+  if (document.activeElement !== $('bn-leverage') && held?.leverage) $('bn-leverage').value = held.leverage;
+  if (document.activeElement !== $('bn-margin') && held?.marginType) $('bn-margin').value = held.marginType === 'ISOLATED' ? 'ISOLATED' : 'CROSSED';
+  $('bn-positions').replaceChildren(...positions.map(position => {
+    const gain = openProfit(position);
+    const target = { symbol: position.symbol, positionSide: position.side === 'BOTH' ? undefined : position.side };
+    const name = positionName(position);
+    return h('div', { class: 'card position', 'data-symbol': position.symbol },
+      h('strong', {}, name, position.leverage ? ' · ' + position.leverage + 'x' : '', h('span', { class: tone(gain), text: ' ' + usd(gain) })),
+      h('dl', {}, [[t('Entry'), position.entry], [t('Break-even'), position.breakEven], [t('Mark price'), position.mark], [t('Liquidation'), position.liquidation]]
+        .map(([label, value]) => h('div', {}, h('dt', { text: label }), h('dd', { text: pairPrice(position.symbol, value) })))),
+      h('span', { class: 'card-actions' },
+        h('button', { type: 'button', text: t('Close'), 'aria-label': t('Close {0} position', position.symbol), onclick: () => brokerAction(t('Close {0} at market', name), 'close', target) }),
+        h('button', { type: 'button', text: t('Close half'), onclick: () => brokerAction(t('Close half of {0} at market', name), 'close', { ...target, fraction: 0.5 }) }),
+        h('button', { type: 'button', text: t('Reverse'), onclick: () => brokerAction(t('Reverse {0} at market', name), 'reverse', target) }),
+        h('button', { type: 'button', text: t('Stop to break-even'), onclick: () => brokerAction(t('Move the stop loss of {0} to break-even at {1}', name, pairPrice(position.symbol, position.breakEven || position.entry)), 'break-even', target) }),
+        h('button', { type: 'button', text: t('Exits'), 'aria-label': t('Exits for {0}', name), onclick: () => exitsDialog(position) }),
+        find(position.symbol + '.P') && h('button', { type: 'button', text: t('Chart'), onclick: () => active().set({ symbol: position.symbol + '.P' }) })));
+  }));
+  if (!positions.length) $('bn-positions').append(hint(t('No open positions.')));
+  $('bn-orders').replaceChildren(...orders.map(order => h('div', { class: 'card' },
+    h('strong', { text: orderName(order) }),
+    h('small', { text: [t(orderKinds[order.kind]), order.price ? t('Limit at {0}', pairPrice(order.symbol, order.price)) : null,
+      order.trigger ? t('Trigger price') + ' ' + pairPrice(order.symbol, order.trigger) : null, order.callback ? t('Callback rate %') + ' ' + order.callback : null,
+      order.activation ? t('Activation price') + ' ' + pairPrice(order.symbol, order.activation) : null, order.reduceOnly ? t('Reduce only') : null].filter(Boolean).join(' · ') }),
+    h('span', { class: 'card-actions' }, h('button', { type: 'button', text: t('Cancel'), 'aria-label': t('Cancel order on {0}', order.symbol),
+      onclick: () => brokerAction(t('Cancel order on {0}', order.symbol) + ': ' + orderName(order), 'cancel', { symbol: order.symbol, id: order.id, algo: order.algo }, t('Order cancelled.')) })))));
+  if (!orders.length) $('bn-orders').append(hint(t('No working orders.')));
+  else if (pair && orders.some(order => order.symbol === pair)) {
+    $('bn-orders').append(h('p', {}, h('button', { type: 'button', id: 'bn-cancel-all', text: t('Cancel all orders on {0}', pair),
+      onclick: () => brokerAction(t('Cancel all orders on {0}', pair), 'cancel-all', { symbol: pair }, t('Order cancelled.')) })));
+  }
+}
+
 function renderTrade() {
+  const binance = state.tradeAccount === 'binance';
+  press($('trade-paper'), !binance);
+  press($('trade-binance'), binance);
+  $('paper-pane').hidden = binance;
+  $('binance-pane').hidden = !binance;
+  $('trade-reset').hidden = binance;
+  if (binance) return renderBinance();
   const open = Object.entries(state.paper.positions);
   const value = symbol => quote(symbol) ?? state.paper.positions[symbol].avg;
   const worth = open.reduce((sum, [symbol, position]) => sum + position.qty * value(symbol), 0);
@@ -1445,6 +1660,48 @@ function wire(pickSymbol) {
     state.paper = defaults().paper;
     afterChange();
   };
+  for (const [id, account] of [['trade-paper', 'paper'], ['trade-binance', 'binance']]) {
+    $(id).onclick = () => {
+      state.tradeAccount = account;
+      if (account === 'binance' && broker.state.status !== 'connected') broker.check();
+      afterChange();
+    };
+  }
+  $('bn-connect').onsubmit = async event => {
+    event.preventDefault();
+    $('bn-submit').disabled = true;
+    try {
+      await broker.connect($('bn-key').value, $('bn-secret').value, $('bn-testnet').checked);
+      toast(t('Connected to Binance USDⓈ-M futures.'));
+    } catch (problem) {
+      toast(t('Binance: {0}', problem.message));
+    }
+    // The page keeps no copy of the credentials once the local server has them.
+    $('bn-key').value = $('bn-secret').value = '';
+    $('bn-submit').disabled = false;
+    renderTrade();
+  };
+  $('bn-disconnect').onclick = async () => {
+    try { await broker.disconnect(); } catch (problem) { toast(t('Binance: {0}', problem.message)); }
+  };
+  $('bn-type').onchange = renderTrade;
+  $('bn-buy').onclick = () => submitBinance(1);
+  $('bn-sell').onclick = () => submitBinance(-1);
+  $('bn-leverage').onchange = () => {
+    const pair = futuresPair(active().state.symbol);
+    if (pair && Number($('bn-leverage').value) >= 1) brokerAction(t('Set {0} leverage to {1}x', pair, $('bn-leverage').value), 'leverage', { symbol: pair, leverage: $('bn-leverage').value }, t('Leverage updated.'));
+  };
+  $('bn-margin').onchange = () => {
+    const pair = futuresPair(active().state.symbol);
+    if (pair) brokerAction(t('Set {0} margin to {1}', pair, t($('bn-margin').value === 'ISOLATED' ? 'Isolated' : 'Cross')), 'margin-type', { symbol: pair, marginType: $('bn-margin').value }, t('Margin mode updated.'));
+  };
+  $('engine-retry').onclick = async () => {
+    await loadEngine();
+    statsCache.clear();
+    $('engine-error').hidden = !engineError;
+    afterChange();
+    renderPanel(true);
+  };
   $('share-copy').onclick = async () => {
     const link = shareLink();
     try {
@@ -1563,11 +1820,14 @@ wire(pickSymbol);
 setTool('cursor');
 afterChange();
 renderPanel(true);
+$('engine-error').hidden = !engineError;
+if (state.settings.live) refreshSymbols();
+broker.check();
 if (shared) {
   view.history?.replaceState(null, '', view.location.pathname + view.location.search);
   toast(t('Shared layout opened. Your previous layout was saved as "{0}".', t('Before shared link')));
 }
 
 // Handle for the automated checks.
-export const workspace = { get state() { return state; }, get charts() { return charts; }, get live() { return live; },
+export const workspace = { get state() { return state; }, get charts() { return charts; }, get live() { return live; }, broker,
   active, setTool, checkAlerts, order, fillOrders, shareLink, importWorkspace };

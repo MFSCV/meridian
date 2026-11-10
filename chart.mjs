@@ -326,6 +326,19 @@ export function createChart(host, state, env) {
         text(6, y - 5, env.t(position.qty > 0 ? 'Long' : 'Short') + ' ' + Math.abs(position.qty) + ' @ ' + fmt(position.avg));
       }
     }
+    // Levels from a connected trading account: entry, break-even, liquidation and working orders.
+    const labelled = [];
+    for (const level of env.levels?.(state.symbol) ?? []) {
+      const y = main.y(level.price);
+      if (!(y > 0 && y < mainH)) continue;
+      const color = colors[level.tone] ?? colors.muted;
+      line(0, y, plot, y, color, { 'stroke-dasharray': level.dash ?? '6 3', class: 'account-line' });
+      // Labels of levels that sit almost on top of each other are placed side by side.
+      const column = labelled.filter(other => Math.abs(other - y) < 12).length;
+      labelled.push(y);
+      text(6 + column * 190, y - 5, level.label);
+      tag(y, fmt(level.price), color);
+    }
     const final = bars[total - 1];
     const tone = final.close >= final.open ? colors.up : colors.down;
     const lastY = main.y(final.close);

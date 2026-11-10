@@ -16,9 +16,18 @@ test('workspace drives charts, drawings, alerts, replay, panels and preferences 
   const original = Object.fromEntries(Object.keys(globals).map(key => [key, Object.getOwnPropertyDescriptor(globalThis, key)]));
   for (const [key, value] of Object.entries(globals)) Object.defineProperty(globalThis, key, { value, configurable: true });
   const network = { fetch: globalThis.fetch, WebSocket: globalThis.WebSocket };
+  // Nothing in this test reaches the network: Binance and the local server are unreachable until a later step stubs them.
+  globalThis.fetch = async () => ({ ok: false, status: 503, json: async () => null });
+  globalThis.WebSocket = class { close() {} };
   try {
     const { workspace } = await import('./app.mjs');
     const get = id => document.getElementById(id);
+    // Binance live data is on by default. The simulated workflow below runs with it turned off.
+    assert.ok(workspace.live);
+    get('settings').click();
+    get('live-toggle').click();
+    get('dialog-close').click();
+    assert.equal(workspace.live, null);
     const all = selector => [...document.querySelectorAll(selector)];
     const pick = label => {
       const entry = all('.menu button').find(button => button.textContent.startsWith(label));
@@ -334,7 +343,13 @@ test('workspace drives charts, drawings, alerts, replay, panels and preferences 
     get('settings').click();
     get('reset').click();
     assert.equal(window.localStorage.getItem('meridian.v1'), null);
-    assert.deepEqual([chart().state.symbol, chart().state.interval, workspace.state.alerts.length], ['SPY', 1440, 0]);
+    assert.deepEqual([chart().state.symbol, chart().state.interval, workspace.state.alerts.length], ['BTCUSDT.P', 60, 0]);
+    // The reset restored the defaults, live Binance data included; carry on with a simulated chart.
+    assert.ok(workspace.live);
+    get('settings').click();
+    get('live-toggle').click();
+    get('dialog-close').click();
+    chart().set({ symbol: 'SPY', interval: 1440 });
     assert.equal(document.documentElement.dataset.theme, 'light');
     assert.equal(all('#symbols .symbol').length, 7);
 
@@ -452,7 +467,11 @@ test('workspace drives charts, drawings, alerts, replay, panels and preferences 
     assert.deepEqual([workspace.state.paper.cash, workspace.state.paper.pending, workspace.state.alerts], [100000, [], []]);
     assert.deepEqual([workspace.state.look.accent, workspace.state.hidden, document.body.dataset.side, get('replay').hidden], [null, [], 'right', false]);
 
-    // Live data is off until it is switched on, then loads, streams and drives alerts.
+    // An imported workspace from before 0.3 is switched to live data. Switched off, live charts say so; switched on, it loads, streams and drives alerts.
+    assert.ok(workspace.live);
+    get('settings').click();
+    get('live-toggle').click();
+    get('dialog-close').click();
     assert.equal(workspace.live, null);
     const sockets = [];
     const row = (time, close) => [time, String(close), String(close + 1), String(close - 1), String(close), '5'];
@@ -488,6 +507,82 @@ test('workspace drives charts, drawings, alerts, replay, panels and preferences 
     get('live-toggle').click();
     assert.equal(workspace.live, null);
     assert.match(svg().textContent, /Live data is turned off/);
+
+    // Binance account: positions and orders reach the panel and the chart, and every order waits for approval.
+    get('live-toggle').click();
+    get('dialog-close').click();
+    const posted = [];
+    let account = {
+      at: 1, mode: 'testnet', hedge: false, revision: 1, account: { wallet: 1000, margin: 1010, available: 900, unrealized: 10, maintenance: 4 },
+      positions: [{ symbol: 'BTCUSDT', side: 'BOTH', amount: 0.01, entry: 150, breakEven: 151, mark: 160, liquidation: 120, unrealized: 0.1, notional: 1.6, margin: 1, leverage: 20, marginType: 'CROSSED' }],
+      orders: [{ id: '21', algo: true, symbol: 'BTCUSDT', side: 'SELL', positionSide: 'BOTH', kind: 'stop', quantity: null, filled: 0, price: null, trigger: 140, reduceOnly: false, closePosition: true }]
+    };
+    const candles = globalThis.fetch;
+    globalThis.fetch = async (url, options = {}) => {
+      if (!String(url).startsWith('./api/binance')) return candles(url, options);
+      const reply = data => ({ ok: true, status: 200, json: async () => data });
+      if (url === './api/binance') return reply({ provider: 'binance', status: 'connected', mode: 'testnet', hedge: false });
+      if (url === './api/binance/account') return reply(account);
+      posted.push([url.slice('./api/binance/'.length), JSON.parse(options.body)]);
+      account = { ...account, at: account.at + 1 };
+      return reply({});
+    };
+    assert.equal(workspace.broker.state.status, 'unavailable');
+    chart().set({ symbol: 'BTCUSDT.P', interval: 1440 });
+    await new Promise(resolve => setImmediate(resolve));
+    get('panel-trade').click();
+    get('trade-binance').click();
+    assert.equal(workspace.state.tradeAccount, 'binance');
+    await new Promise(resolve => setImmediate(resolve));
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(workspace.broker.state.status, 'connected');
+    assert.deepEqual([get('paper-pane').hidden, get('bn-connect').hidden, get('bn-live').hidden], [true, true, false]);
+    assert.match(get('bn-note').textContent, /Connected to Binance.*Testnet/);
+    assert.match(get('bn-positions').textContent, /Long 0\.01 BTCUSDT · 20x.*Entry150\.0.*Break-even151\.0.*Liquidation120\.0/);
+    assert.match(get('bn-orders').textContent, /Sell whole position BTCUSDT.*Stop loss · Trigger price 140\.0/);
+    assert.equal(svg().querySelectorAll('.account-line').length, 4);
+    assert.match(svg().textContent, /Liquidation/);
+    assert.equal(get('bn-buy').disabled, false);
+    const approve = async () => {
+      get('bn-confirm').click();
+      for (let turn = 0; turn < 4; turn += 1) await new Promise(resolve => setImmediate(resolve));
+    };
+    all('#bn-positions button').find(button => button.textContent === 'Reverse').click();
+    assert.match(get('bn-confirm-text').textContent, /Reverse Long 0\.01 BTCUSDT at market/);
+    assert.equal(posted.length, 0, 'nothing is sent before approval');
+    await approve();
+    assert.deepEqual(posted.at(-1), ['reverse', { symbol: 'BTCUSDT' }]);
+    get('bn-type').value = 'limit';
+    get('bn-type').dispatchEvent(new window.Event('change'));
+    assert.deepEqual([get('bn-price-field').hidden, get('bn-trigger-field').hidden, get('bn-tp-field').hidden], [false, true, false]);
+    get('bn-buy').click();
+    assert.match(get('toasts').textContent, /Enter a quantity above zero/);
+    get('bn-qty').value = '0.02';
+    get('bn-price').value = '145';
+    get('bn-sl').value = '130';
+    get('bn-buy').click();
+    assert.match(get('bn-confirm-text').textContent, /Buy 0\.02 BTCUSDT · Limit · Limit at 145 · Stop loss 130/);
+    await approve();
+    assert.deepEqual(posted.at(-1), ['order', { symbol: 'BTCUSDT', side: 'BUY', kind: 'limit', quantity: '0.02', reduceOnly: false, price: '145', stopLoss: '130' }]);
+    get('bn-type').value = 'trailing';
+    get('bn-type').dispatchEvent(new window.Event('change'));
+    get('bn-callback').value = '1.5';
+    get('bn-sell').click();
+    await approve();
+    assert.deepEqual(posted.at(-1), ['order', { symbol: 'BTCUSDT', side: 'SELL', kind: 'trailing', quantity: '0.02', reduceOnly: true, callbackRate: '1.5' }]);
+    all('#bn-orders button').find(button => button.textContent === 'Cancel').click();
+    await approve();
+    assert.deepEqual(posted.at(-1), ['cancel', { symbol: 'BTCUSDT', id: '21', algo: true }]);
+    // A spot chart cannot be traded on the futures account, and the paper account is untouched throughout.
+    chart().set({ symbol: 'BTCUSDT', interval: 1440 });
+    assert.equal(get('bn-buy').disabled, true);
+    assert.equal(svg().querySelectorAll('.account-line').length, 0);
+    get('trade-paper').click();
+    assert.deepEqual([get('paper-pane').hidden, get('binance-pane').hidden], [false, true]);
+    workspace.broker.stop();
+    get('settings').click();
+    get('live-toggle').click();
+    assert.equal(workspace.live, null);
   } finally {
     Object.assign(globalThis, network);
     window.close();

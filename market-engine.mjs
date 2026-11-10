@@ -5,14 +5,32 @@ async function load() {
     const { readFile } = await import('node:fs/promises');
     return WebAssembly.instantiate(await readFile(source));
   }
-  const response = await fetch(source);
-  if (!response.ok) throw new Error('Could not load the Meridian market engine: HTTP ' + response.status);
+  const response = await fetch(source, { cache: 'no-cache' });
+  if (!response.ok) throw new Error('HTTP ' + response.status);
   return WebAssembly.instantiate(await response.arrayBuffer());
 }
 
-const { instance: { exports: engine } } = await load();
+let engine = null;
+// Why the simulated data engine is unavailable, or null when it loaded.
+export let engineError = null;
+
+// Loads the engine. A failure is kept in engineError instead of stopping the workspace, and can be retried.
+export async function loadEngine(loader = load) {
+  try {
+    const exports = (await loader()).instance.exports;
+    if (typeof exports.generate !== 'function' || typeof exports.result_ptr !== 'function' || !exports.memory) throw new Error('Incompatible engine');
+    engine = exports;
+    engineError = null;
+  } catch (problem) {
+    engine = null;
+    engineError = String(problem?.message ?? problem);
+  }
+  return !engineError;
+}
+await loadEngine();
 
 export function simulatedBars(instrument, minutes, end) {
+  if (!engine) return [];
   let seed = 101;
   for (const char of instrument.symbol) seed = Math.imul(seed, 31) + char.charCodeAt(0);
   const length = engine.generate(seed, instrument.base, minutes, end);
