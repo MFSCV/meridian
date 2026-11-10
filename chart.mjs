@@ -5,6 +5,8 @@ import { L } from './i18n.mjs';
 
 const NS = 'http://www.w3.org/2000/svg';
 export const styles = ['Candles', 'Hollow candles', 'Bars', 'Line', 'Area', 'Baseline', 'Heikin Ashi'];
+// Plot kinds that draw shapes rather than one value per bar.
+export const shapes = new Set(['barcolor', 'boxes', 'rays', 'band', 'profile']);
 export const palette = ['#3b82f6', '#e8912d', '#a366e0', '#17a99a', '#e0559a', '#93a31f'];
 const levels = [0, 0.236, 0.382, 0.5, 0.618, 0.786, 1];
 const ink = '#3b82f6';
@@ -13,7 +15,9 @@ let serial = 0;
 
 function node(parent, tag, attrs = {}, text) {
   const element = document.createElementNS(NS, tag);
-  for (const [key, value] of Object.entries(attrs)) element.setAttribute(key, value);
+  for (const [key, value] of Object.entries(attrs)) {
+    if (value !== null && value !== undefined) element.setAttribute(key, value);
+  }
   if (text !== undefined) element.textContent = text;
   parent.append(element);
   return element;
@@ -88,11 +92,17 @@ export function createChart(host, state, env) {
   const shown = () => state.style === 'Heikin Ashi' ? cached('heikin', () => heikinAshi(raw())) : raw();
   function plotsOf(indicator) {
     try {
-      return cached(indicator.id + JSON.stringify(indicator.params), () => definition(indicator.id).plots(raw(), indicator.params));
+      return cached(indicator.id + JSON.stringify(indicator.params), () => definition(indicator.id).plots(raw(), indicator.params, context));
     } catch {
       return [];
     }
   }
+  // What a study may ask for beyond the bars of this chart. Each value is read only when a study uses it.
+  const context = {
+    get interval() { return state.interval; },
+    get daily() { return series(instrument(), 1440); },
+    get interest() { return env.interest?.(state.symbol, state.interval) ?? null; }
+  };
   const fmt = value => price(value, instrument());
   const compact = value => Math.abs(value) >= 1e6 ? (value / 1e6).toFixed(2) + 'M' : Math.abs(value) >= 1e4 ? (value / 1e3).toFixed(1) + 'K'
     : value.toLocaleString('en-US', { maximumFractionDigits: Math.abs(value) < 10 ? 4 : 2 });
@@ -174,7 +184,7 @@ export function createChart(host, state, env) {
       min = Math.min(min, lineStyle ? bars[index].close : bars[index].low);
       max = Math.max(max, lineStyle ? bars[index].close : bars[index].high);
     }
-    for (const values of [...overlays.flatMap(indicator => plotsOf(indicator).filter(item => item.kind !== 'volume').map(item => item.values)),
+    for (const values of [...overlays.flatMap(indicator => plotsOf(indicator).filter(item => item.kind !== 'volume' && !shapes.has(item.kind)).map(item => item.values)),
       ...compares.map(item => item.values)]) {
       for (let index = first; index <= last; index++) {
         if (values[index] !== null && values[index] !== undefined && !Number.isNaN(values[index])) {
@@ -241,6 +251,64 @@ export function createChart(host, state, env) {
       path(parts.down, { fill: colors.down, opacity: 0.32, class: 'volume' });
     }
 
+    // Study shapes that sit behind the price: filled bands, boxes and the volume profile.
+    const right = index => index === null || index === undefined ? plot : x(index) + view.width / 2;
+    const left = index => index === null || index === undefined || index < 0 ? 0 : x(index) - view.width / 2;
+    const studies = overlays.flatMap(indicator => plotsOf(indicator));
+    for (const item of studies) {
+      if (item.kind === 'band') {
+        let from = null;
+        const flush = to => {
+          if (from === null || to - from < 1) return;
+          let d = '';
+          for (let index = from; index <= to; index++) d += (index === from ? 'M' : 'L') + round(x(index)) + ' ' + round(main.y(item.upper[index]));
+          for (let index = to; index >= from; index--) d += 'L' + round(x(index)) + ' ' + round(main.y(item.lower[index]));
+          path(d + 'Z', { fill: item.color, opacity: item.opacity ?? 0.15, class: 'study-band' });
+        };
+        for (let index = first; index <= last + 1; index++) {
+          const filled = index <= last && item.upper[index] !== null && item.upper[index] !== undefined && item.lower[index] !== null && item.lower[index] !== undefined;
+          if (filled && from === null) from = index;
+          if (!filled && from !== null) {
+            flush(index - 1);
+            from = null;
+          }
+        }
+      } else if (item.kind === 'boxes') {
+        for (const box of item.boxes) {
+          const [x1, x2] = [left(box.from), Math.min(plot, right(box.to))];
+          if (x2 <= 0 || x1 >= plot || x2 <= x1) continue;
+          const [top, bottom] = [main.y(box.top), main.y(box.bottom)];
+          if (bottom < 0 || top > mainH) continue;
+          node(series_, 'rect', { x: round(Math.max(0, x1)), y: round(top), width: round(x2 - Math.max(0, x1)), height: Math.max(1, round(bottom - top)), fill: box.color, opacity: box.opacity ?? 0.15, class: 'study-box' });
+        }
+      } else if (item.kind === 'profile' && item.profile) {
+        const reach = Math.min(plot * 0.24, 260);
+        const parts = { buy: '', sell: '' };
+        for (const row of item.profile.rows) {
+          const [top, bottom] = [main.y(row.high), main.y(row.low)];
+          if (bottom < 0 || top > mainH) continue;
+          const tall = Math.max(1, round(bottom - top - 0.5));
+          const buy = row.buy / item.profile.peak * reach;
+          const sell = row.sell / item.profile.peak * reach;
+          parts.buy += 'M' + round(plot - buy) + ' ' + round(top) + 'h' + round(buy) + 'v' + tall + 'h' + round(-buy) + 'Z';
+          parts.sell += 'M' + round(plot - buy - sell) + ' ' + round(top) + 'h' + round(sell) + 'v' + tall + 'h' + round(-sell) + 'Z';
+        }
+        path(parts.buy, { fill: '#26a69a', opacity: 0.45, class: 'study-profile' });
+        path(parts.sell, { fill: '#ef5350', opacity: 0.45, class: 'study-profile' });
+        const edge = plot - reach - 4;
+        for (const [value, label, width] of [[item.profile.poc, 'POC', 2], [item.profile.valueHigh, 'VAH', 1], [item.profile.valueLow, 'VAL', 1]]) {
+          const y = main.y(value);
+          if (!(y > 0 && y < mainH)) continue;
+          node(series_, 'line', { x1: round(edge), y1: round(y), x2: plot, y2: round(y), stroke: colors.text, 'stroke-width': width, opacity: 0.7, 'stroke-dasharray': width === 2 ? null : '3 3' });
+          node(series_, 'text', { x: round(edge - 4), y: round(y + 4), 'text-anchor': 'end', fill: colors.muted }, label);
+        }
+        node(series_, 'text', { x: round(plot - 6), y: 14, 'text-anchor': 'end', fill: colors.muted, class: 'study-profile-note' },
+          env.t('Buy {0}% · Sell {1}%', Math.round(item.profile.buyShare * 100), 100 - Math.round(item.profile.buyShare * 100)));
+      }
+    }
+    // A study may give every bar its own colour.
+    const tint = studies.find(item => item.kind === 'barcolor')?.colors;
+
     // Price series.
     if (lineStyle) {
       const d = linePath(bars.map(bar => bar.close), main.y, x, first, last);
@@ -267,12 +335,16 @@ export function createChart(host, state, env) {
         const [open, high, low, close] = [bar.open, bar.high, bar.low, bar.close].map(value => round(main.y(value)));
         const top = Math.min(open, close);
         const bottom = Math.max(open, close);
-        parts[bar.close >= bar.open ? 'up' : 'down'] += state.style === 'Bars'
+        const group = tint?.[index] ?? (bar.close >= bar.open ? 'up' : 'down');
+        parts[group] = (parts[group] ?? '') + (state.style === 'Bars'
           ? 'M' + cx + ' ' + high + 'V' + low + 'M' + round(cx - body / 2) + ' ' + open + 'H' + cx + 'M' + cx + ' ' + close + 'H' + round(cx + body / 2)
           : 'M' + cx + ' ' + high + 'V' + top + 'M' + cx + ' ' + bottom + 'V' + low +
-            'M' + round(cx - body / 2) + ' ' + top + 'h' + round(body) + 'v' + Math.max(1, round(bottom - top)) + 'h' + round(-body) + 'Z';
+            'M' + round(cx - body / 2) + ' ' + top + 'h' + round(body) + 'v' + Math.max(1, round(bottom - top)) + 'h' + round(-body) + 'Z');
       }
       const hollow = state.style === 'Hollow candles';
+      for (const [group, d] of Object.entries(parts)) {
+        if (group !== 'up' && group !== 'down') path(d, { stroke: group, fill: state.style === 'Bars' ? 'none' : group, class: 'candles tinted' });
+      }
       path(parts.up, { stroke: colors.up, fill: state.style === 'Bars' ? 'none' : hollow ? colors.panel : colors.up, class: 'candles' });
       path(parts.down, { stroke: colors.down, fill: state.style === 'Bars' ? 'none' : colors.down, class: 'candles' });
     }
@@ -288,8 +360,24 @@ export function createChart(host, state, env) {
             }
           }
           path(dots, { fill: (indicator.colors?.[order] ?? palette[item.color ?? 0]), class: 'study' });
-        } else if (item.kind !== 'volume') {
-          path(linePath(item.values, main.y, x, first, last), { stroke: (indicator.colors?.[order] ?? palette[item.color ?? 0]), 'stroke-width': indicator.width ?? 1.4, class: 'study' });
+        } else if (item.kind === 'rays') {
+          const placed = [];
+          for (const ray of item.rays) {
+            const y = main.y(ray.price);
+            if (!(y > 0 && y < mainH)) continue;
+            const [x1, x2] = [left(ray.from), Math.min(plot, right(ray.to))];
+            if (x2 <= 0 || x1 >= plot) continue;
+            node(series_, 'line', { x1: round(Math.max(0, x1)), y1: round(y), x2: round(x2), y2: round(y), stroke: ray.color, 'stroke-width': ray.width ?? 1,
+              'stroke-dasharray': ray.dash ?? null, opacity: ray.opacity ?? 0.85, class: 'study-ray' });
+            if (!ray.label) continue;
+            // A label sits at the start of a session line, otherwise at the right edge; close neighbours step left.
+            const column = placed.filter(other => Math.abs(other - y) < 11).length;
+            placed.push(y);
+            if (ray.start) node(series_, 'text', { x: round(Math.max(4, x1 + 3)), y: round(y - 4), fill: ray.color, class: 'study-label' }, ray.label);
+            else node(series_, 'text', { x: round(x2 - 6 - column * 74), y: round(y - 4), 'text-anchor': 'end', fill: ray.color, class: 'study-label' }, ray.label);
+          }
+        } else if (item.kind !== 'volume' && !shapes.has(item.kind)) {
+          path(linePath(item.values, main.y, x, first, last), { stroke: (indicator.colors?.[order] ?? item.stroke ?? palette[item.color ?? 0]), 'stroke-width': item.width ?? indicator.width ?? 1.4, class: 'study' });
         }
       }
     }
@@ -468,7 +556,7 @@ export function createChart(host, state, env) {
     main.className = 'values ' + (change >= 0 ? 'up' : 'down');
     for (const element of legend.querySelectorAll('[data-indicator]')) {
       const indicator = state.indicators.find(item => item.uid === element.dataset.indicator);
-      element.textContent = indicator.hidden ? env.t('hidden') : plotsOf(indicator).map(item => {
+      element.textContent = indicator.hidden ? env.t('hidden') : plotsOf(indicator).filter(item => !shapes.has(item.kind)).map(item => {
         const value = item.values[at];
         return value === null || value === undefined || Number.isNaN(value) ? '–' : compact(value);
       }).join('  ');

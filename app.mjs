@@ -2,7 +2,7 @@
 import { instruments, liveInstruments, intervals, intervalLabel, find, series, price, csv, useLive, registerLive, listedInstruments, engineError, loadEngine } from './market.mjs';
 import { registry, definition, rsi, sma, macd, atr } from './indicators.mjs';
 import { compileScript, backtest, formulaHelp } from './script.mjs';
-import { createChart, styles, paneOf, palette } from './chart.mjs';
+import { createChart, styles, paneOf, palette, shapes } from './chart.mjs';
 import { createLive, liveTerms, listSymbols } from './live.mjs';
 import { createBroker, futuresPair } from './broker.mjs';
 import { locales, locale, detect, useLocale, t, L, translateTree } from './i18n.mjs';
@@ -134,7 +134,12 @@ const examples = [[L('Momentum'), 'close - sma(close, 20)'], [L('MACD line'), 'e
   [L('RSI reversal strategy'), 'strength = rsi(close, 14)\nplot strength\nbuy when crossover(strength, 30)\nsell when crossunder(strength, 70)']];
 const extraLabels = [L('Use light theme'), L('Long'), L('Short'), L('Buy'), L('Sell'), L('Formula')];
 const paramNames = { length: L('Length'), width: L('Width'), fast: L('Fast length'), slow: L('Slow length'), signal: L('Signal length'), smooth: L('Smoothing'),
-  span: L('Span length'), height: L('Height (% of the price pane)'), expression: L('Formula or script'), name: L('Name') };
+  span: L('Span length'), height: L('Height (% of the price pane)'), expression: L('Formula or script'), name: L('Name'),
+  zones: L('Show vector candle zones'), wicks: L('Zones include wicks'), limit: L('Maximum to keep'), daily: L('Yesterday, last week and daily open'), pivots: L('Pivot point and M levels'),
+  supports: L('Support and resistance levels 1 to 3'), adr: L('Average daily range'), psy: L('Weekly psy levels'), weekends: L('Show sessions at weekends'),
+  both: L('Draw both sides for every vector candle'), rows: L('Rows') };
+// Parameters shown as a tick box instead of a number.
+const switches = new Set(['overlay', 'zones', 'wicks', 'daily', 'pivots', 'supports', 'adr', 'psy', 'weekends', 'both']);
 
 const densities = { compact: L('Compact'), cozy: L('Comfortable'), roomy: L('Large') };
 const crosshairs = { cross: L('Cross'), vertical: L('Vertical line only'), none: L('Hidden') };
@@ -465,16 +470,16 @@ function configure(chart, indicator) {
   const spec = definition(indicator.id);
   const error = h('p', { role: 'alert', class: 'error' });
   const inputs = Object.entries({ ...spec.params, ...indicator.params }).map(([key, value]) => {
-    const control = key === 'overlay' ? h('input', { type: 'checkbox', checked: Boolean(value) })
+    const control = switches.has(key) ? h('input', { type: 'checkbox', checked: Boolean(value) })
       : typeof spec.params[key] === 'number' ? h('input', { type: 'number', min: key === 'width' ? 0.1 : 1, max: 500, step: key === 'width' ? 0.1 : 1, value })
       : key === 'expression' ? h('textarea', { rows: 6, spellcheck: 'false', text: value }) : h('input', { type: 'text', value, spellcheck: 'false' });
     control.dataset.key = key;
-    return key === 'overlay' ? h('label', { class: 'check' }, control, t('Draw on the price pane')) : field(t(paramNames[key] ?? key), control);
+    return switches.has(key) ? h('label', { class: 'check' }, control, t(key === 'overlay' ? L('Draw on the price pane') : paramNames[key])) : field(t(paramNames[key] ?? key), control);
   });
   // Colour and width apply to the lines an indicator draws.
   const swatches = chart.plots(indicator).map((plot, order) => {
-    if (['volume', 'histogram'].includes(plot.kind)) return null;
-    const control = h('input', { type: 'color', value: indicator.colors?.[order] ?? palette[plot.color ?? 0] });
+    if (['volume', 'histogram'].includes(plot.kind) || shapes.has(plot.kind)) return null;
+    const control = h('input', { type: 'color', value: indicator.colors?.[order] ?? plot.stroke ?? palette[plot.color ?? 0] });
     control.dataset.plot = order;
     return field(t('Colour of {0}', plot.label), control);
   }).filter(Boolean);
@@ -758,6 +763,7 @@ function buildCharts() {
       tool: () => tool,
       toolDone: () => tool !== 'cursor' && setTool('cursor'),
       levels: accountLevels,
+      interest: (symbol, minutes) => state.settings.live ? live?.interest(symbol, minutes) ?? null : null,
       status: chart => !find(chart.symbol).live ? (engineError ? t('The simulated data engine could not load. Live Binance charts still work.') : null) : !state.settings.live ? t('Live data is turned off. Turn it on in Settings.')
         : live?.status(chart.symbol, chart.interval) === 'error' ? t('Live data is unavailable right now.') : t('Loading live data…'),
       askText: done => {
@@ -1265,7 +1271,7 @@ function renderWindow() {
   const rows = [[t('Time'), time(bar.time, 'full')], [t('Open'), price(bar.open, item)], [t('High'), price(bar.high, item)], [t('Low'), price(bar.low, item)],
     [t('Close'), price(bar.close, item)], [t('Change'), signed(change)], [t('Volume'), bar.volume.toLocaleString('en-US', { maximumFractionDigits: 2 })]];
   for (const indicator of chart.state.indicators.filter(entry => entry.id !== 'volume' && !entry.hidden)) {
-    for (const plot of chart.plots(indicator)) {
+    for (const plot of chart.plots(indicator).filter(entry => !shapes.has(entry.kind))) {
       const value = plot.values[index];
       rows.push([plot.label, value === null || value === undefined || Number.isNaN(value) ? '–' : value.toLocaleString('en-US', { maximumFractionDigits: 4 })]);
     }

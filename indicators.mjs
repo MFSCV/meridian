@@ -1,3 +1,5 @@
+import { pvsraIndicators } from './pvsra.mjs';
+
 // Technical indicators. Every function returns an array aligned with its input, with null during warmup.
 const closes = bars => bars.map(bar => bar.close);
 
@@ -342,6 +344,7 @@ export const registry = [
   { id: 'cmf', name: 'Chaikin Money Flow (CMF)', pane: 'separate', params: { length: 20 }, guides: [0],
     plots: (bars, p) => [line('CMF ' + p.length, cmf(bars, p.length), 3)] },
   { id: 'stdev', name: 'Standard Deviation', pane: 'separate', params: { length: 20 },
-    plots: (bars, p) => [line('StdDev ' + p.length, stdev(closes(bars), p.length), 1)] }
+    plots: (bars, p) => [line('StdDev ' + p.length, stdev(closes(bars), p.length), 1)] },
+  ...pvsraIndicators
 ];
 export const definition = id => registry.find(item => item.id === id);

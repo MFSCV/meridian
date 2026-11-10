@@ -60,6 +60,11 @@ test('every registered indicator returns plots aligned with the bars', () => {
     const plots = spec.plots(bars, spec.params);
     assert.ok(plots.length > 0, spec.id);
     for (const plot of plots) {
+      // Shape plots (candle colours, boxes, rays, bands, profiles) carry no value per bar.
+      if (['barcolor', 'boxes', 'rays', 'band', 'profile'].includes(plot.kind)) {
+        assert.deepEqual(plot.values, [], spec.id);
+        continue;
+      }
       assert.equal(plot.values.length, bars.length, spec.id);
       assert.ok(Number.isFinite(plot.values.at(-1)), spec.id);
     }

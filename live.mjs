@@ -45,6 +45,7 @@ export function createLive({ request = (...args) => fetch(...args), Socket = glo
   const store = new Map();
   const state = new Map();
   const sockets = new Map();
+  const interestStore = new Map();
   let wanted = new Set();
   let stopped = false;
   const key = (symbol, minutes) => symbol + '|' + minutes;
@@ -107,6 +108,26 @@ export function createLive({ request = (...args) => fetch(...args), Socket = glo
     status: (symbol, minutes) => state.get(key(symbol, minutes)) ?? 'loading',
     retry(symbol, minutes) {
       if (state.get(key(symbol, minutes)) === 'error') load(symbol, minutes);
+    },
+    // Open interest history for a perpetual future as a Map of bar time to contracts, or null while it loads or when
+    // Binance has none (spot pairs, weekly bars, and anything older than its 30-day window).
+    interest(symbol, minutes) {
+      const venue = venueOf(symbol);
+      const id = key(symbol, minutes);
+      if (venue.kind !== 'futures' || !names[minutes] || minutes === 10080) return null;
+      if (!interestStore.has(id)) {
+        interestStore.set(id, null);
+        request('https://fapi.binance.com/futures/data/openInterestHist?symbol=' + encodeURIComponent(venue.pair) + '&period=' + names[minutes] + '&limit=500')
+          .then(response => response.ok ? response.json() : [])
+          .then(rows => {
+            const found = new Map((Array.isArray(rows) ? rows : []).map(row => [Number(row.timestamp), Number(row.sumOpenInterest)]).filter(([time, value]) => Number.isFinite(time) && value > 0));
+            if (!found.size) return;
+            interestStore.set(id, found);
+            if (!stopped) onData(symbol, minutes);
+          })
+          .catch(() => {});
+      }
+      return interestStore.get(id);
     },
     // Most recent price seen for a symbol on any loaded interval.
     last(symbol) {

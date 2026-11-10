@@ -6,3 +6,13 @@ This product is licensed under the Apache License, Version 2.0.
 Meridian is an independent work. It is not affiliated with or endorsed by
 TradingView or any other charting vendor and includes none of their code or
 assets. Product names mentioned in the documentation belong to their owners.
+
+pvsra.mjs is a port of the Pine script "PVSRA Levels + MACD (fast)", which is
+derived from the open-source "Traders Reality Main" indicator and
+"Traders_Reality_Lib" library (pattern formation by plasmapug; rise retrace
+continuation by infernix, peshocore and xtech5192; daylight saving and psy
+refactor by xtech5192), with moving averages after "Moving Averages For All
+Timeframes" by JohnMuchow. That file, and only that file, is made available
+under the Mozilla Public License, Version 2.0 (https://mozilla.org/MPL/2.0/).
+At the request of the upstream licence note, Meridian does not use the
+upstream name for it.

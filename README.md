@@ -18,6 +18,7 @@ Meridian is an independent project. It is not affiliated with, endorsed by or de
 | Layouts | One to four charts with optional symbol, interval and crosshair sync; named layouts saved in the browser |
 | Drawings | 18 tools: trend line, ray, extended line, arrow, horizontal line and ray, vertical line, parallel channel, rectangle, ellipse, brush, Fibonacci retracement, long and short position, text, measure, price range, date range; magnet, lock, hide, undo and redo |
 | Indicators | 23 built in: volume, SMA, EMA, WMA, Bollinger Bands, Donchian and Keltner channels, Ichimoku, Supertrend, Parabolic SAR, VWAP, RSI, MACD, Stochastic, ATR, ADX, CCI, Williams %R, MFI, ROC, OBV, CMF, standard deviation; plus symbol comparison |
+| PVSRA studies | Seven studies ported from an open-source Pine script: vector candles with their zones; EMAs 5, 13, 50, 200 and 800 with the 50 cloud; levels (yesterday and last week high and low, daily open, pivot point with M levels, optional R/S 1 to 3, average daily range, weekly psy levels); market sessions for London, New York, Tokyo, Hong Kong, Sydney and the EU and US Brinks hours; estimated liquidation levels, confirmed with real open interest on Binance perpetual futures; VWAP with bands; a volume profile with a buy and sell split. See [docs/pvsra.md](docs/pvsra.md) |
 | Scripts | A small language for custom indicators and long-only strategies, with a backtest report and entry and exit markers. See [docs/scripting.md](docs/scripting.md) |
 | Alerts | Price crossing, greater than and less than, checked in the browser on replay bars and on live prices |
 | Replay | Start from any bar, play at four speeds or step bar by bar |
@@ -89,6 +90,7 @@ Preferences, drawings, alerts, layouts and the paper account are stored in your 
 | `app.mjs` | Workspace shell: toolbars, panels, dialogs, orders, sharing, persistence |
 | `chart.mjs` | Chart engine: rendering, zoom and pan, crosshair, drawings, replay |
 | `indicators.mjs` | Indicator maths and the indicator registry |
+| `pvsra.mjs` | The PVSRA studies (Mozilla Public License 2.0, see NOTICE) |
 | `script.mjs` | The formula and strategy language and the backtester |
 | `market.mjs` | Simulated instruments and price history |
 | `live.mjs` | Live spot and futures data from Binance's public market data services |

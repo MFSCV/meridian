@@ -8,7 +8,7 @@ import { createBinance, binanceActions } from './binance.mjs';
 const files = new Map([
   ['/', ['index.html', 'text/html']], ['/style.css', ['style.css', 'text/css']],
   ['/market-engine.wasm', ['market-engine.wasm', 'application/wasm']],
-  ...['app', 'broker', 'chart', 'i18n', 'indicators', 'live', 'market', 'market-engine', 'observed', 'script'].map(name => ['/' + name + '.mjs', [name + '.mjs', 'text/javascript']])
+  ...['app', 'broker', 'chart', 'i18n', 'indicators', 'live', 'market', 'market-engine', 'observed', 'pvsra', 'script'].map(name => ['/' + name + '.mjs', [name + '.mjs', 'text/javascript']])
 ]);
 // The port is 4173 unless a --port=N argument, MERIDIAN_PORT or PORT says otherwise. The server only ever listens on loopback.
 const port = Number(process.argv.find(arg => arg.startsWith('--port='))?.slice(7) ?? process.env.MERIDIAN_PORT ?? process.env.PORT) || 4173;
