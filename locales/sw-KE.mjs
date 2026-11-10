@@ -1,4 +1,7 @@
 export default {
+  "Find a workspace action": "Find a workspace action",
+  "No matching actions.": "No matching actions.",
+  "Quick actions": "Quick actions",
   "1 day": "Siku 1",
   "1 day in 5 minute bars": "Siku 1 kwa pau za dakika 5",
   "1 hour": "Saa 1",

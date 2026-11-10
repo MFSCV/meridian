@@ -38,6 +38,19 @@ test('workspace drives charts, drawings, alerts, replay, panels and preferences 
     assert.equal(get('theme').getAttribute('aria-label'), 'Use light theme');
     assert.ok(svg().querySelector('.price-line'));
 
+    // The command palette supports filtering and dispatches existing controls from the keyboard.
+    document.body.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'k', ctrlKey: true, bubbles: true }));
+    assert.equal(document.activeElement, get('action-query'));
+    get('action-query').value = 'watchlist';
+    get('action-query').dispatchEvent(new window.Event('input'));
+    assert.equal(all('#action-results button').length, 1);
+    get('action-query').dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Enter' }));
+    if (workspace.state.panel !== 'watch') get('panel-watch').click();
+    get('close-panel-watch').click();
+    assert.equal(workspace.state.panel, null);
+    assert.equal(document.activeElement, get('panel-watch'));
+    get('panel-watch').click();
+
     // Symbol search, interval and chart type.
     get('symbol').click();
     get('symbol-query').value = 'ethereum';

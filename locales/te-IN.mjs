@@ -1,4 +1,7 @@
 export default {
+  "Find a workspace action": "Find a workspace action",
+  "No matching actions.": "No matching actions.",
+  "Quick actions": "Quick actions",
   "1 day": "1 రోజు",
   "1 day in 5 minute bars": "5 నిమిషాల బార్లలో 1 రోజు",
   "1 hour": "1 గంట",
