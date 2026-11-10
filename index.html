@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Meridian — Market Workspace</title>
+<meta name="description" content="Meridian is an open-source market charting workspace with drawing tools, indicators, layouts, alerts, replay and a screener. Chart prices are simulated.">
+<link rel="stylesheet" href="style.css">
+<script type="module" src="app.mjs"></script>
+<script type="module" src="observed.mjs"></script>
+</head>
+<body>
+<h1 class="sr-only">Meridian market workspace</h1>
+<header id="top" role="toolbar" aria-label="Chart toolbar"></header>
+<nav id="tools" aria-label="Drawing tools"></nav>
+<main id="stage">
+  <div id="replaybar" role="toolbar" aria-label="Bar replay" hidden>
+    <span class="chip">Replay</span>
+    <button id="replay-pick" type="button">Pick start</button>
+    <button id="replay-play" type="button">Play</button>
+    <button id="replay-step" type="button">Next bar</button>
+    <label>Speed <select id="replay-speed"><option value="1000">1×</option><option value="500">2×</option><option value="200">5×</option><option value="100">10×</option></select></label>
+    <button id="replay-exit" type="button">Exit replay</button>
+  </div>
+  <div id="charts"></div>
+</main>
+<div id="bottom" role="toolbar" aria-label="Time range and scale"></div>
+<aside id="panel" aria-label="Side panel">
+  <section data-panel="watch" aria-labelledby="watch-title">
+    <header class="panel-head"><h2 id="watch-title">Watchlist</h2><button id="watch-add" type="button">Add symbol</button></header>
+    <div class="columns" aria-hidden="true"><span>Symbol</span><span>Last</span><span>Chg%</span><span></span></div>
+    <div id="symbols"></div>
+    <div id="details"></div>
+  </section>
+  <section data-panel="alerts" aria-labelledby="alerts-title" hidden>
+    <header class="panel-head"><h2 id="alerts-title">Alerts</h2><button id="alert-new" type="button">Create alert</button></header>
+    <p class="hint">Alerts are checked on this device against simulated bars, when a bar replay advances and when they are created.</p>
+    <div id="alert-list"></div>
+    <h3>Log</h3>
+    <div id="alert-log"></div>
+  </section>
+  <section data-panel="data" aria-labelledby="data-title" hidden>
+    <header class="panel-head"><h2 id="data-title">Data window</h2><button id="export" type="button">Export CSV</button></header>
+    <dl id="window"></dl>
+    <h3>Object tree</h3>
+    <div id="objects"></div>
+    <details><summary>Visible bars</summary>
+      <div class="table-wrap"><table><thead><tr><th scope="col">Time</th><th scope="col">Open</th><th scope="col">High</th><th scope="col">Low</th><th scope="col">Close</th><th scope="col">Volume</th></tr></thead><tbody id="data"></tbody></table></div>
+    </details>
+  </section>
+  <section data-panel="screener" aria-labelledby="screener-title" hidden>
+    <header class="panel-head"><h2 id="screener-title">Screener</h2></header>
+    <div class="filters">
+      <label>Type <select id="screen-type"><option value="">All</option><option>Stock</option><option>ETF</option><option>Crypto</option><option>Forex</option><option>Commodity</option></select></label>
+      <label>Move <select id="screen-move"><option value="">All</option><option value="up">Gainers</option><option value="down">Losers</option></select></label>
+      <label>RSI <select id="screen-rsi"><option value="">All</option><option value="high">Above 70</option><option value="low">Below 30</option></select></label>
+    </div>
+    <div class="table-wrap tall"><table id="screen"><thead><tr></tr></thead><tbody></tbody></table></div>
+  </section>
+  <section data-panel="script" aria-labelledby="script-title" hidden>
+    <header class="panel-head"><h2 id="script-title">Formula editor</h2></header>
+    <p class="hint">Write one expression per indicator. It runs on this device only.</p>
+    <label>Name <input id="script-name" value="Momentum" maxlength="24"></label>
+    <label>Formula <textarea id="script-source" rows="4" spellcheck="false">close - sma(close, 20)</textarea></label>
+    <label class="check"><input type="checkbox" id="script-overlay"> Draw on the price pane</label>
+    <button id="script-add" type="button" class="primary">Add to chart</button>
+    <p id="script-error" role="alert"></p>
+    <h3>Examples</h3>
+    <div id="script-examples"></div>
+    <h3>Reference</h3>
+    <p class="hint" id="script-help"></p>
+  </section>
+  <section data-panel="trade" aria-labelledby="trade-title" hidden>
+    <header class="panel-head"><h2 id="trade-title">Paper trading</h2><button id="trade-reset" type="button">Reset account</button></header>
+    <p class="hint">Simulated account on simulated prices. No broker is connected and no order leaves this device.</p>
+    <dl id="account"></dl>
+    <div class="ticket">
+      <label>Quantity <input id="trade-qty" type="number" min="0.0001" step="any" value="1"></label>
+      <button id="trade-buy" type="button" class="buy">Buy</button>
+      <button id="trade-sell" type="button" class="sell">Sell</button>
+    </div>
+    <h3>Positions</h3>
+    <div id="positions"></div>
+    <h3>Orders</h3>
+    <div id="orders"></div>
+  </section>
+  <section data-panel="sources" aria-labelledby="observed-title" hidden>
+    <header class="panel-head"><h2 id="observed-title">Official sources</h2><button id="refresh-feeds" type="button">Refresh</button></header>
+    <p class="hint">Observed data, kept apart from the simulated charts.</p>
+    <article class="feed"><h3>Euro reference rates</h3><p>Currency units per EUR · Daily reference observations</p>
+      <p><a href="https://www.ecb.europa.eu/stats/policy_and_exchange_rates/euro_reference_exchange_rates/html/index.en.html">Source: European Central Bank</a></p>
+      <p id="ecb-status" role="status">Loading ECB data…</p>
+      <div class="table-wrap"><table aria-label="ECB reference rates"><thead><tr><th scope="col">Currency</th><th scope="col">Rate per EUR</th></tr></thead><tbody id="ecb-rows"></tbody></table></div>
+    </article>
+    <article class="feed"><h3>Apple filings</h3><p>Recent filing metadata · Apple Inc. (AAPL)</p>
+      <p><a href="https://www.sec.gov/edgar/browse/?CIK=320193">Source: SEC EDGAR</a></p>
+      <p id="edgar-status" role="status">Loading EDGAR data…</p>
+      <div class="table-wrap"><table aria-label="Apple SEC filings"><thead><tr><th scope="col">Form</th><th scope="col">Filed</th><th scope="col">Record</th></tr></thead><tbody id="edgar-rows"></tbody></table></div>
+    </article>
+  </section>
+</aside>
+<nav id="rail" aria-label="Panels"></nav>
+<dialog id="dialog" aria-labelledby="dialog-title">
+  <header><h2 id="dialog-title"></h2><button id="dialog-close" type="button" aria-label="Close dialog">✕</button></header>
+  <div id="dialog-body"></div>
+</dialog>
+<div id="toasts" role="status" aria-live="polite"></div>
+</body>
+</html>
