@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { atr, bollinger, compileFormula, ema, heikinAshi, macd, registry, rsi, sma, stochastic, vwap } from './indicators.mjs';
+import { adx, atr, bollinger, cci, ema, heikinAshi, macd, obv, parabolicSar, registry, roc, rsi, sma, stochastic, supertrend, vwap, williamsR, wma } from './indicators.mjs';
+import { backtest, compileFormula, compileScript } from './script.mjs';
 import { instruments, series } from './market.mjs';
 
 const near = (actual, expected) => assert.ok(Math.abs(actual - expected) < 1e-9, actual + ' is not ' + expected);
@@ -63,4 +64,52 @@ test('every registered indicator returns plots aligned with the bars', () => {
       assert.ok(Number.isFinite(plot.values.at(-1)), spec.id);
     }
   }
+});
+
+test('added studies match hand-computed values', () => {
+  near(wma([1, 2, 3], 3).at(-1), 14 / 6);
+  assert.deepEqual(roc([10, 11, 22], 1), [null, 10.000000000000009, 100]);
+  const bars = [
+    { time: 0, open: 10, high: 12, low: 9, close: 11, volume: 100 },
+    { time: 1, open: 11, high: 13, low: 10, close: 12, volume: 300 },
+    { time: 2, open: 12, high: 12.5, low: 10, close: 10.5, volume: 50 },
+    { time: 3, open: 10.5, high: 11, low: 8, close: 8.5, volume: 200 }
+  ];
+  assert.deepEqual(obv(bars), [0, 300, 250, 50]);
+  assert.deepEqual(williamsR(bars, 2), [null, -25, -83.33333333333334, -88.88888888888889]);
+  near(cci(bars, 2)[1], (35 / 3 - (32 / 3 + 35 / 3) / 2) / (0.015 * 0.5));
+  for (const values of [parabolicSar(bars), supertrend(bars, 2, 1), adx(bars, 2).adx]) assert.equal(values.length, bars.length);
+  assert.ok(parabolicSar(bars)[1] <= bars[1].low);
+  assert.ok(parabolicSar(bars)[3] >= bars[3].high);
+});
+
+test('scripts assign, plot and produce strategy signals', () => {
+  const closes = [5, 4, 3, 4, 6, 8, 7, 5, 3, 2];
+  const bars = closes.map((close, index) => ({ time: index, open: closes[index - 1] ?? close, high: close + 1, low: close - 1, close, volume: 10 }));
+  const script = compileScript(`
+    # moving average cross
+    fast = sma(close, 2)
+    slow = sma(close, 3)
+    plot fast as Fast
+    plot slow
+    buy when crossover(fast, slow) and close > 3
+    sell when crossunder(fast, slow) or close < 0`);
+  assert.equal(script.strategy, true);
+  const result = script(bars);
+  assert.deepEqual(result.plots.map(plot => plot.label), ['Fast', 'slow']);
+  assert.deepEqual(result.buy, [0, 0, 0, 0, 1, 0, 0, 0, 0, 0]);
+  assert.deepEqual(result.sell, [0, 0, 0, 0, 0, 0, 0, 1, 0, 0]);
+  const report = backtest(bars, result.buy, result.sell, { capital: 1000, fee: 0 });
+  assert.equal(report.trades.length, 1);
+  assert.deepEqual([report.trades[0].entryPrice, report.trades[0].exitPrice], [6, 5]);
+  near(report.net, 5 / 6 - 1);
+  near(report.drawdown, 1 - (1000 / 6 * 5) / (1000 / 6 * 8));
+  assert.equal(report.winRate, 0);
+  assert.equal(report.open, null);
+  assert.deepEqual(compileFormula('not (close > 4)')(bars).slice(0, 3), [0, 1, 1]);
+  assert.equal(compileScript('close > 4').strategy, false);
+  assert.throws(() => compileScript('x = close\nplot y'), /Line 2: Unknown name "y"/);
+  assert.throws(() => compileScript('close = 1\nplot close'), /reserved/);
+  assert.throws(() => compileScript('a = close\nfoo bar'), /Line 2: Expected an assignment/);
+  assert.throws(() => compileScript('constructor'), SyntaxError);
 });

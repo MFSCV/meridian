@@ -20,12 +20,23 @@ export const instruments = [
   { symbol: 'USDJPY', name: 'US Dollar / Japanese Yen', base: 152.4, type: 'Forex', digits: 3 }
 ];
 
+// Shown only when the visitor turns on live data. Prices come from the visitor's own connection to Binance.
+export const liveInstruments = [
+  { symbol: 'BTCUSDT', name: 'Bitcoin / TetherUS', type: 'Crypto', live: true, source: 'Binance spot' },
+  { symbol: 'ETHUSDT', name: 'Ethereum / TetherUS', type: 'Crypto', live: true, source: 'Binance spot' },
+  { symbol: 'SOLUSDT', name: 'Solana / TetherUS', type: 'Crypto', live: true, source: 'Binance spot' },
+  { symbol: 'BNBUSDT', name: 'BNB / TetherUS', type: 'Crypto', live: true, source: 'Binance spot' },
+  { symbol: 'XRPUSDT', name: 'XRP / TetherUS', type: 'Crypto', live: true, source: 'Binance spot', digits: 4 }
+];
+let liveSource = null;
+export const useLive = source => { liveSource = source; };
+
 export const intervals = [5, 15, 30, 60, 120, 240, 720, 1440, 10080];
 export const intervalLabel = minutes => minutes < 60 ? minutes + 'm' : minutes < 1440 ? minutes / 60 + 'h'
   : minutes === 1440 ? '1D' : '1W';
 export const intervalName = minutes => minutes < 60 ? minutes + ' minutes' : minutes === 60 ? '1 hour'
   : minutes < 1440 ? minutes / 60 + ' hours' : minutes === 1440 ? '1 day' : '1 week';
-export const find = symbol => instruments.find(item => item.symbol === symbol);
+export const find = symbol => instruments.find(item => item.symbol === symbol) ?? liveInstruments.find(item => item.symbol === symbol);
 
 const hour = 3600000;
 const end = Date.UTC(2026, 10, 10);
@@ -99,6 +110,7 @@ function aggregate(bars, size) {
 // Returns a shared, cached array. Callers must not mutate it.
 export function series(instrument, minutes) {
   if (!intervals.includes(minutes)) throw new RangeError('Unsupported interval');
+  if (instrument.live) return liveSource?.get(instrument.symbol, minutes) ?? [];
   const key = instrument.symbol + '|' + minutes;
   if (!cache.has(key)) {
     const bars = minutes === 60 ? hourly(instrument)

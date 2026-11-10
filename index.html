@@ -22,10 +22,17 @@
     <label>Speed <select id="replay-speed"><option value="1000">1×</option><option value="500">2×</option><option value="200">5×</option><option value="100">10×</option></select></label>
     <button id="replay-exit" type="button">Exit replay</button>
   </div>
+  <div id="drawbar" role="toolbar" aria-label="Selected drawing" hidden>
+    <label>Colour <input id="draw-color" type="color"></label>
+    <label>Width <select id="draw-width"><option>1</option><option>1.5</option><option>2</option><option>3</option><option>4</option></select></label>
+    <label>Line <select id="draw-dash"><option value="solid">Solid</option><option value="dash">Dashed</option><option value="dot">Dotted</option></select></label>
+    <button id="draw-delete" type="button">Delete</button>
+  </div>
   <div id="charts"></div>
 </main>
 <div id="bottom" role="toolbar" aria-label="Time range and scale"></div>
 <aside id="panel" aria-label="Side panel">
+  <div id="panel-grip" role="separator" aria-orientation="vertical" aria-label="Resize side panel" tabindex="0"></div>
   <section data-panel="watch" aria-labelledby="watch-title">
     <header class="panel-head"><h2 id="watch-title">Watchlist</h2><button id="watch-add" type="button">Add symbol</button></header>
     <div class="columns" aria-hidden="true"><span>Symbol</span><span>Last</span><span>Chg%</span><span></span></div>
@@ -59,12 +66,13 @@
   </section>
   <section data-panel="script" aria-labelledby="script-title" hidden>
     <header class="panel-head"><h2 id="script-title">Formula editor</h2></header>
-    <p class="hint">Write one expression per indicator. It runs on this device only.</p>
+    <p class="hint">Write one expression, or a script with assignments, plot lines and buy when and sell when rules. It runs on this device only.</p>
     <label>Name <input id="script-name" value="Momentum" maxlength="24"></label>
-    <label>Formula <textarea id="script-source" rows="4" spellcheck="false">close - sma(close, 20)</textarea></label>
+    <label>Formula or script <textarea id="script-source" rows="7" spellcheck="false">close - sma(close, 20)</textarea></label>
     <label class="check"><input type="checkbox" id="script-overlay"> Draw on the price pane</label>
-    <button id="script-add" type="button" class="primary">Add to chart</button>
+    <div class="ticket"><button id="script-add" type="button" class="primary">Add to chart</button><button id="script-test" type="button">Run backtest</button></div>
     <p id="script-error" role="alert"></p>
+    <div id="backtest" aria-live="polite"></div>
     <h3>Examples</h3>
     <div id="script-examples"></div>
     <h3>Reference</h3>
@@ -72,17 +80,42 @@
   </section>
   <section data-panel="trade" aria-labelledby="trade-title" hidden>
     <header class="panel-head"><h2 id="trade-title">Paper trading</h2><button id="trade-reset" type="button">Reset account</button></header>
-    <p class="hint">Simulated account on simulated prices. No broker is connected and no order leaves this device.</p>
+    <p class="hint">Simulated account. No broker is connected and no order leaves this device. Limit and stop orders fill when a replay or a live feed moves through their price.</p>
     <dl id="account"></dl>
     <div class="ticket">
+      <label>Order type <select id="trade-type"><option value="market">Market</option><option value="limit">Limit</option><option value="stop">Stop</option></select></label>
       <label>Quantity <input id="trade-qty" type="number" min="0.0001" step="any" value="1"></label>
+      <label id="trade-price-field" hidden>Order price <input id="trade-price" type="number" min="0" step="any"></label>
+      <label class="half">Take profit <input id="trade-tp" type="number" min="0" step="any" placeholder="Optional"></label>
+      <label class="half">Stop loss <input id="trade-sl" type="number" min="0" step="any" placeholder="Optional"></label>
       <button id="trade-buy" type="button" class="buy">Buy</button>
       <button id="trade-sell" type="button" class="sell">Sell</button>
     </div>
     <h3>Positions</h3>
     <div id="positions"></div>
-    <h3>Orders</h3>
+    <h3>Working orders</h3>
+    <div id="pending"></div>
+    <h3>Filled orders</h3>
     <div id="orders"></div>
+  </section>
+  <section data-panel="insights" aria-labelledby="insights-title" hidden>
+    <header class="panel-head"><h2 id="insights-title">Insights</h2></header>
+    <p class="hint">A rule-based summary of the active chart. It is computed on this device, uses no AI model and is not investment advice.</p>
+    <div id="insights"></div>
+  </section>
+  <section data-panel="community" aria-labelledby="community-title" hidden>
+    <header class="panel-head"><h2 id="community-title">Share and community</h2></header>
+    <p class="hint">A share link contains your current charts and their drawings. Anyone who opens it sees the same layout; nothing is uploaded.</p>
+    <button id="share-copy" type="button" class="primary">Copy share link</button>
+    <button id="share-idea" type="button">Post this chart as an idea</button>
+    <p class="hint">Ideas, questions and chat happen in the project's GitHub Discussions. Posting needs a GitHub account.</p>
+    <p><a id="link-discussions" href="https://github.com/MFSCV/meridian/discussions" target="_blank" rel="noopener">Community discussions</a></p>
+    <p><a href="https://github.com/MFSCV/meridian/issues" target="_blank" rel="noopener">Report a problem or request a feature</a></p>
+    <p><a href="https://github.com/MFSCV/meridian/blob/main/CONTRIBUTING.md" target="_blank" rel="noopener">Contribute code or translations</a></p>
+    <h3>Move your workspace</h3>
+    <p class="hint">There are no accounts. To use your workspace on another device, export it to a file and import it there.</p>
+    <div class="ticket"><button id="workspace-export" type="button">Export workspace</button><button id="workspace-import" type="button">Import workspace</button></div>
+    <input id="workspace-file" type="file" accept="application/json,.json" hidden aria-label="Workspace file">
   </section>
   <section data-panel="sources" aria-labelledby="observed-title" hidden>
     <header class="panel-head"><h2 id="observed-title">Official sources</h2><button id="refresh-feeds" type="button">Refresh</button></header>

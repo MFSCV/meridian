@@ -1,6 +1,7 @@
 // Chart engine: one SVG chart with panes, zoom, pan, crosshair, drawings and bar replay.
 import { series, find, price, intervalLabel } from './market.mjs';
 import { definition, heikinAshi } from './indicators.mjs';
+import { L } from './i18n.mjs';
 
 const NS = 'http://www.w3.org/2000/svg';
 export const styles = ['Candles', 'Hollow candles', 'Bars', 'Line', 'Area', 'Baseline', 'Heikin Ashi'];
@@ -57,7 +58,7 @@ export function createChart(host, state, env) {
   legend.className = 'legend';
   host.append(legend);
   const layers = { base: node(svg, 'g'), draw: node(svg, 'g', { 'clip-path': 'url(#main' + id + ')' }), cross: node(svg, 'g', { 'pointer-events': 'none' }) };
-  const view = { end: null, width: 8, auto: true };
+  const view = { end: null, width: 8, auto: true, price: null };
   const pointers = new Map();
   const memo = new Map();
   let replay = null;
@@ -67,6 +68,7 @@ export function createChart(host, state, env) {
   let draft = null;
   let measure = null;
   let drag = null;
+  let markers = [];
 
   const instrument = () => find(state.symbol);
   const raw = () => series(instrument(), state.interval);
@@ -114,6 +116,18 @@ export function createChart(host, state, env) {
 
   function render() {
     const colors = env.colors();
+    if (!raw().length) {
+      geo = null;
+      for (const layer of Object.values(layers)) layer.replaceChildren();
+      const width = host.clientWidth || 900;
+      const height = host.clientHeight || 460;
+      svg.setAttribute('viewBox', '0 0 ' + width + ' ' + height);
+      node(layers.base, 'text', { x: width / 2, y: height / 2, 'text-anchor': 'middle', fill: colors.muted, 'font-size': 13, class: 'empty' },
+        env.status?.(state) ?? env.t('Loading…'));
+      const values = legend.querySelector('.main .values');
+      if (values) values.textContent = '';
+      return;
+    }
     const bars = shown();
     const total = length();
     const width = host.clientWidth || 900;
@@ -122,9 +136,17 @@ export function createChart(host, state, env) {
     const foot = 22;
     const plot = width - axis;
     const separate = state.indicators.filter(indicator => !indicator.hidden && paneOf(indicator) === 'separate');
-    const share = Math.min(0.5, 0.21 * separate.length);
-    const mainH = (height - foot) * (1 - share);
-    const subH = separate.length ? (height - foot) * share / separate.length : 0;
+    const weights = separate.map(indicator => Math.min(4, Math.max(0.25, indicator.size ?? 1)));
+    const wanted = weights.reduce((sum, weight) => sum + weight, 0) * 0.21;
+    const unit = (height - foot) * 0.21 * Math.min(1, 0.75 / (wanted || 1));
+    const tops = [];
+    let used = 0;
+    for (const weight of weights) {
+      tops.push(used);
+      used += weight * unit;
+    }
+    const mainH = height - foot - used;
+    host.classList.toggle('hide-legend', env.store.settings.legend === false);
     if (view.auto) view.width = Math.max(3, Math.min(8, plot / 90));
     view.auto = false;
     if (view.end === null) view.end = total + 3;
@@ -157,13 +179,13 @@ export function createChart(host, state, env) {
         }
       }
     }
-    const main = scale(0, mainH, min, max, state.log);
+    const main = view.price ? scale(0, mainH, view.price.low, view.price.high, state.log, 0) : scale(0, mainH, min, max, state.log);
     const ms = state.interval * 60000;
     geo = { width, height, plot, axis, foot, mainH, from, x, main, first, last, total, ms, t0: raw()[0].time, panes: [] };
 
     svg.setAttribute('viewBox', '0 0 ' + width + ' ' + height);
-    svg.setAttribute('aria-label', instrument().name + ' simulated price chart, ' + intervalLabel(state.interval) +
-      '. Arrow keys inspect bars, plus and minus zoom. The Data panel lists the same bars as a table.');
+    svg.setAttribute('aria-label', env.t('{0} price chart, {1}. Arrow keys inspect bars, plus and minus zoom. The Data panel lists the same bars as a table.',
+      instrument().name, intervalLabel(state.interval)));
     const base = layers.base;
     base.replaceChildren();
     const defs = node(base, 'defs');
@@ -203,10 +225,11 @@ export function createChart(host, state, env) {
     // Volume bars along the bottom of the main pane.
     if (overlays.some(indicator => indicator.id === 'volume')) {
       let peak = 0;
+      const volumeShare = Math.min(0.8, Math.max(0.03, (overlays.find(indicator => indicator.id === 'volume').params.height ?? 18) / 100));
       for (let index = first; index <= last; index++) peak = Math.max(peak, bars[index].volume);
       const parts = { up: '', down: '' };
       for (let index = first; index <= last; index++) {
-        const size = bars[index].volume / peak * mainH * 0.18;
+        const size = bars[index].volume / peak * mainH * volumeShare;
         parts[bars[index].close >= bars[index].open ? 'up' : 'down'] +=
           'M' + round(x(index) - body / 2) + ' ' + round(mainH - size) + 'h' + round(body) + 'v' + round(size) + 'h' + round(-body) + 'Z';
       }
@@ -252,12 +275,39 @@ export function createChart(host, state, env) {
 
     // Overlay studies and comparison symbols.
     for (const indicator of overlays) {
-      for (const item of plotsOf(indicator)) {
-        if (item.kind !== 'volume') path(linePath(item.values, main.y, x, first, last), { stroke: palette[item.color ?? 0], 'stroke-width': 1.4, class: 'study' });
+      for (const [order, item] of plotsOf(indicator).entries()) {
+        if (item.kind === 'dots') {
+          let dots = '';
+          for (let index = first; index <= last; index++) {
+            if (item.values[index] !== null && item.values[index] !== undefined) {
+              dots += 'M' + round(x(index) - 1.6) + ' ' + round(main.y(item.values[index])) + 'a1.6 1.6 0 1 0 3.2 0a1.6 1.6 0 1 0 -3.2 0';
+            }
+          }
+          path(dots, { fill: (indicator.colors?.[order] ?? palette[item.color ?? 0]), class: 'study' });
+        } else if (item.kind !== 'volume') {
+          path(linePath(item.values, main.y, x, first, last), { stroke: (indicator.colors?.[order] ?? palette[item.color ?? 0]), 'stroke-width': indicator.width ?? 1.4, class: 'study' });
+        }
       }
     }
     for (const item of compares) path(linePath(item.values, main.y, x, first, last), { stroke: item.color, 'stroke-width': 1.6, class: 'compare' });
     geo.compares = compares;
+
+    // Strategy entries and exits from the last backtest.
+    for (const marker of markers) {
+      const at = (marker.time - geo.t0) / ms;
+      if (at < first || at > last) continue;
+      const buying = marker.side === 'buy';
+      const y = main.y(buying ? bars[at].low : bars[at].high) + (buying ? 12 : -12);
+      node(series_, 'path', { d: 'M' + round(x(at)) + ' ' + round(y - (buying ? 7 : -7)) + 'l5 ' + (buying ? 8 : -8) + 'h-10Z',
+        fill: buying ? colors.up : colors.down, class: 'marker' });
+    }
+    for (const order of (env.store.paper.pending ?? []).filter(item => item.symbol === state.symbol)) {
+      const y = main.y(order.price);
+      if (y > 0 && y < mainH) {
+        line(0, y, plot, y, order.qty > 0 ? colors.up : colors.down, { 'stroke-dasharray': '8 3 2 3', class: 'order-line' });
+        text(6, y - 5, (order.qty > 0 ? env.t('Buy') : env.t('Sell')) + ' ' + Math.abs(order.qty) + ' ' + env.t(order.type === 'limit' ? L('limit') : L('stop')));
+      }
+    }
 
     // Alerts, the paper position and the last price.
     for (const alert of env.store.alerts.filter(item => item.symbol === state.symbol && item.status === 'active')) {
@@ -272,20 +322,21 @@ export function createChart(host, state, env) {
       const y = main.y(position.avg);
       if (y > 0 && y < mainH) {
         line(0, y, plot, y, colors.muted, { 'stroke-dasharray': '2 3' });
-        text(6, y - 5, (position.qty > 0 ? 'Long ' : 'Short ') + Math.abs(position.qty) + ' @ ' + fmt(position.avg));
+        text(6, y - 5, env.t(position.qty > 0 ? 'Long' : 'Short') + ' ' + Math.abs(position.qty) + ' @ ' + fmt(position.avg));
       }
     }
     const final = bars[total - 1];
     const tone = final.close >= final.open ? colors.up : colors.down;
     const lastY = main.y(final.close);
-    if (lastY > 0 && lastY < mainH) {
+    if (lastY > 0 && lastY < mainH && env.store.settings.priceLine !== false) {
       line(0, lastY, plot, lastY, tone, { 'stroke-dasharray': '1 3' });
       tag(lastY, fmt(final.close), tone);
     }
 
     // Separate study panes.
     separate.forEach((indicator, order) => {
-      const top = mainH + order * subH;
+      const top = mainH + tops[order];
+      const subH = weights[order] * unit;
       const spec = definition(indicator.id);
       const plots = plotsOf(indicator);
       let low = Infinity;
@@ -301,11 +352,12 @@ export function createChart(host, state, env) {
       }
       if (low === Infinity) [low, high] = [0, 1];
       const pane = spec.range ? scale(top, subH, spec.range[0], spec.range[1], false, 0.04) : scale(top + 16, subH - 20, low, high, false, 0.06);
-      geo.panes.push({ top, height: subH, scale: pane, indicator });
+      geo.panes.push({ top, height: subH, scale: pane, indicator, unit });
       line(0, top, width, top, colors.edge);
+      node(base, 'rect', { x: round(plot / 2 - 16), y: round(top - 2), width: 32, height: 4, rx: 2, fill: colors.muted, opacity: 0.55, class: 'grip' });
       for (const guide of spec.guides ?? []) line(0, pane.y(guide), plot, pane.y(guide), colors.muted, { 'stroke-dasharray': '3 4', opacity: 0.6 });
       for (const value of spec.range ? spec.guides : [low, high]) text(plot + 5, Math.min(top + subH - 3, Math.max(top + 10, pane.y(value) + 4)), compact(value));
-      for (const item of plots) {
+      for (const [order, item] of plots.entries()) {
         if (item.kind === 'histogram') {
           const parts = { up: '', down: '' };
           const zero = pane.y(0);
@@ -319,7 +371,7 @@ export function createChart(host, state, env) {
           path(parts.up, { fill: colors.up, opacity: 0.55 });
           path(parts.down, { fill: colors.down, opacity: 0.55 });
         } else {
-          path(linePath(item.values, pane.y, x, first, last), { stroke: palette[item.color ?? 0], 'stroke-width': 1.4, class: 'study' });
+          path(linePath(item.values, pane.y, x, first, last), { stroke: (indicator.colors?.[order] ?? palette[item.color ?? 0]), 'stroke-width': indicator.width ?? 1.4, class: 'study' });
         }
       }
       text(8, top + 13, plots.map(item => item.label).join(' · ') || spec.name, { class: 'pane-title' });
@@ -347,17 +399,17 @@ export function createChart(host, state, env) {
       element.onclick = action;
       return element;
     };
-    row('main', [span('legend-symbol', state.symbol + ' · ' + intervalLabel(state.interval)), span('chip', 'Simulated'),
+    row('main', [span('legend-symbol', state.symbol + ' · ' + intervalLabel(state.interval)), span('chip', env.t(instrument().live ? 'Live' : 'Simulated')),
       Object.assign(span('values'), { id: 'readout' + id })]);
     svg.setAttribute('aria-describedby', 'readout' + id);
     state.indicators.forEach(indicator => {
-      const name = indicator.id === 'formula' ? indicator.params.name : definition(indicator.id).name;
+      const name = indicator.id === 'formula' ? indicator.params.name : env.t(definition(indicator.id).name);
       const values = span('values');
       values.dataset.indicator = indicator.uid;
       const parts = [span('legend-name', name), values];
-      if (Object.keys(indicator.params).length) parts.push(button('Settings for ' + name, '⚙', () => env.configure(api, indicator)));
-      parts.push(button((indicator.hidden ? 'Show ' : 'Hide ') + name, indicator.hidden ? '◌' : '◉', () => api.patchIndicator(indicator.uid, { hidden: !indicator.hidden })),
-        button('Remove ' + name, '✕', () => api.removeIndicator(indicator.uid)));
+      if (Object.keys(indicator.params).length) parts.push(button(env.t('Settings for {0}', name), '⚙', () => env.configure(api, indicator)));
+      parts.push(button(env.t(indicator.hidden ? L('Show {0}') : L('Hide {0}'), name), indicator.hidden ? '◌' : '◉', () => api.patchIndicator(indicator.uid, { hidden: !indicator.hidden })),
+        button(env.t('Remove {0}', name), '✕', () => api.removeIndicator(indicator.uid)));
       row(indicator.hidden ? 'muted' : '', parts);
     });
     state.compare.forEach((symbol, index) => {
@@ -365,7 +417,7 @@ export function createChart(host, state, env) {
       values.dataset.compare = symbol;
       const name = span('legend-name', symbol);
       name.style.color = palette[(index + 2) % palette.length];
-      row('', [name, values, button('Remove ' + symbol + ' comparison', '✕', () => api.toggleCompare(symbol))]);
+      row('', [name, values, button(env.t('Remove {0} comparison', symbol), '✕', () => api.toggleCompare(symbol))]);
     });
   }
 
@@ -383,7 +435,7 @@ export function createChart(host, state, env) {
     main.className = 'values ' + (change >= 0 ? 'up' : 'down');
     for (const element of legend.querySelectorAll('[data-indicator]')) {
       const indicator = state.indicators.find(item => item.uid === element.dataset.indicator);
-      element.textContent = indicator.hidden ? 'hidden' : plotsOf(indicator).map(item => {
+      element.textContent = indicator.hidden ? env.t('hidden') : plotsOf(indicator).map(item => {
         const value = item.values[at];
         return value === null || value === undefined || Number.isNaN(value) ? '–' : compact(value);
       }).join('  ');
@@ -398,7 +450,8 @@ export function createChart(host, state, env) {
   function drawCross() {
     const layer = layers.cross;
     layer.replaceChildren();
-    if (!cross || !geo) return;
+    const mode = env.store.settings.crosshair ?? 'cross';
+    if (!cross || !geo || mode === 'none') return;
     const colors = env.colors();
     const x = round(geo.x(cross.index));
     if (x < 0 || x > geo.plot) return;
@@ -409,7 +462,7 @@ export function createChart(host, state, env) {
     const left = Math.max(0, Math.min(geo.plot - wide, x - wide / 2));
     node(layer, 'rect', { x: left, y: geo.height - geo.foot + 1, width: wide, height: geo.foot - 2, fill: colors.text, rx: 2 });
     node(layer, 'text', { x: left + 6, y: geo.height - 7, fill: colors.panel }, label);
-    if (cross.y === null || cross.y === undefined || cross.y > geo.height - geo.foot) return;
+    if (mode === 'vertical' || cross.y === null || cross.y === undefined || cross.y > geo.height - geo.foot) return;
     const pane = cross.y < geo.mainH ? geo.main : geo.panes.find(item => cross.y >= item.top && cross.y < item.top + item.height)?.scale;
     node(layer, 'line', { x1: 0, x2: geo.plot, y1: round(cross.y), y2: round(cross.y), ...dash });
     if (!pane) return;
@@ -435,7 +488,20 @@ export function createChart(host, state, env) {
     const points = drawing.points.map(pixel);
     const [a, b = a] = points;
     switch (drawing.type) {
-      case 'trend': case 'measure': return [[a.x, a.y, b.x, b.y]];
+      case 'trend': case 'measure': case 'arrow': return [[a.x, a.y, b.x, b.y]];
+      case 'extended': {
+        const reach = 5000 / (Math.hypot(b.x - a.x, b.y - a.y) || 1);
+        return [[a.x - (b.x - a.x) * reach, a.y - (b.y - a.y) * reach, a.x + (b.x - a.x) * reach, a.y + (b.y - a.y) * reach]];
+      }
+      case 'hray': return [[a.x, a.y, geo.plot, a.y]];
+      case 'channel': {
+        const c = points[2] ?? a;
+        const shift = c.y - (a.y + (b.y - a.y) * (c.x - a.x) / ((b.x - a.x) || 1));
+        return [[a.x, a.y, b.x, b.y], [a.x, a.y + shift, b.x, b.y + shift]];
+      }
+      case 'ellipse': return [[a.x, a.y, b.x, a.y], [b.x, a.y, b.x, b.y], [b.x, b.y, a.x, b.y], [a.x, b.y, a.x, a.y]];
+      case 'pricerange': return [[a.x, a.y, a.x, b.y]];
+      case 'daterange': return [[a.x, a.y, b.x, a.y]];
       case 'ray': {
         const reach = 5000 / (Math.hypot(b.x - a.x, b.y - a.y) || 1);
         return [[a.x, a.y, a.x + (b.x - a.x) * reach, a.y + (b.y - a.y) * reach]];
@@ -478,14 +544,43 @@ export function createChart(host, state, env) {
     const list = [...(env.store.settings.hide ? [] : drawings()), ...(draft ? [draft] : []), ...(measure ? [measure] : [])];
     for (const drawing of list) {
       const color = drawing.color ?? ink;
-      const stroke = { stroke: color, 'stroke-width': drawing.id === selected ? 2.2 : 1.5, fill: 'none', class: 'drawing' };
+      const stroke = { stroke: color, 'stroke-width': (drawing.width ?? 1.5) + (drawing.id === selected ? 0.7 : 0), fill: 'none', class: 'drawing',
+        ...(drawing.dash === 'dash' ? { 'stroke-dasharray': '7 5' } : drawing.dash === 'dot' ? { 'stroke-dasharray': '2 4' } : {}) };
       const points = drawing.points.map(pixel);
       const [a, b = a] = points;
       const note = (x, y, content, extra = {}) => node(layer, 'text', { x: round(x), y: round(y), fill: color, ...extra }, content);
-      if (['trend', 'ray', 'hline', 'vline'].includes(drawing.type)) {
+      if (['trend', 'ray', 'hline', 'vline', 'extended', 'hray', 'arrow', 'pricerange', 'daterange'].includes(drawing.type)) {
         const [[x1, y1, x2, y2]] = segments(drawing);
         node(layer, 'line', { x1: round(x1), y1: round(y1), x2: round(x2), y2: round(y2), ...stroke });
         if (drawing.type === 'hline') note(6, a.y - 5, fmt(drawing.points[0].p));
+        if (drawing.type === 'hray') note(a.x + 6, a.y - 5, fmt(drawing.points[0].p));
+        if (drawing.type === 'arrow') {
+          const angle = Math.atan2(b.y - a.y, b.x - a.x);
+          const wing = turn => round(b.x - 11 * Math.cos(angle + turn)) + ' ' + round(b.y - 11 * Math.sin(angle + turn));
+          node(layer, 'path', { d: 'M' + wing(0.45) + 'L' + round(b.x) + ' ' + round(b.y) + 'L' + wing(-0.45), ...stroke });
+        }
+        if (drawing.type === 'pricerange') {
+          const [start, finish] = drawing.points;
+          for (const y of [a.y, b.y]) node(layer, 'line', { x1: round(a.x - 7), x2: round(a.x + 7), y1: round(y), y2: round(y), ...stroke });
+          note(a.x + 10, (a.y + b.y) / 2 + 4, (finish.p >= start.p ? '+' : '') + fmt(finish.p - start.p) + ' (' + ((finish.p / start.p - 1) * 100).toFixed(2) + '%)');
+        }
+        if (drawing.type === 'daterange') {
+          const [start, finish] = drawing.points;
+          for (const x of [a.x, b.x]) node(layer, 'line', { x1: round(x), x2: round(x), y1: round(a.y - 7), y2: round(a.y + 7), ...stroke });
+          const count = Math.round(Math.abs(finish.t - start.t) / geo.ms);
+          const hours = Math.abs(finish.t - start.t) / 3600000;
+          note((a.x + b.x) / 2, a.y - 8, count + ' ' + env.t('bars') + ' · ' + (hours >= 48 ? Math.round(hours / 24) + 'd' : Math.round(hours) + 'h'), { 'text-anchor': 'middle' });
+        }
+      } else if (drawing.type === 'channel') {
+        const [[x1, y1, x2, y2], [x3, y3, x4, y4]] = segments(drawing);
+        node(layer, 'path', { d: 'M' + round(x1) + ' ' + round(y1) + 'L' + round(x2) + ' ' + round(y2) + 'L' + round(x4) + ' ' + round(y4) + 'L' + round(x3) + ' ' + round(y3) + 'Z',
+          fill: color, 'fill-opacity': 0.1, stroke: 'none' });
+        for (const [fromX, fromY, toX, toY] of [[x1, y1, x2, y2], [x3, y3, x4, y4]]) {
+          node(layer, 'line', { x1: round(fromX), y1: round(fromY), x2: round(toX), y2: round(toY), ...stroke });
+        }
+      } else if (drawing.type === 'ellipse') {
+        node(layer, 'ellipse', { cx: round((a.x + b.x) / 2), cy: round((a.y + b.y) / 2), rx: round(Math.abs(b.x - a.x) / 2), ry: round(Math.abs(b.y - a.y) / 2),
+          ...stroke, fill: color, 'fill-opacity': 0.12 });
       } else if (drawing.type === 'rect') {
         node(layer, 'rect', { x: round(Math.min(a.x, b.x)), y: round(Math.min(a.y, b.y)), width: round(Math.abs(b.x - a.x)),
           height: round(Math.abs(b.y - a.y)), ...stroke, fill: color, 'fill-opacity': 0.12 });
@@ -505,9 +600,9 @@ export function createChart(host, state, env) {
         box(a.y, points[2].y, colors.down);
         const percent = value => ((value / entry.p - 1) * 100).toFixed(2) + '%';
         const ratio = Math.abs(target.p - entry.p) / (Math.abs(entry.p - stop.p) || 1);
-        note(left + 4, points[1].y + (points[1].y < a.y ? -5 : 13), 'Target ' + fmt(target.p) + ' (' + percent(target.p) + ')', { fill: colors.up });
-        note(left + 4, points[2].y + (points[2].y < a.y ? -5 : 13), 'Stop ' + fmt(stop.p) + ' (' + percent(stop.p) + ')', { fill: colors.down });
-        note(left + 4, a.y - 5, (target.p > entry.p ? 'Long' : 'Short') + ' · risk/reward ' + ratio.toFixed(2), { fill: colors.text });
+        note(left + 4, points[1].y + (points[1].y < a.y ? -5 : 13), env.t('Target') + ' ' + fmt(target.p) + ' (' + percent(target.p) + ')', { fill: colors.up });
+        note(left + 4, points[2].y + (points[2].y < a.y ? -5 : 13), env.t('Stop') + ' ' + fmt(stop.p) + ' (' + percent(stop.p) + ')', { fill: colors.down });
+        note(left + 4, a.y - 5, env.t(target.p > entry.p ? 'Long' : 'Short') + ' · ' + env.t('risk/reward') + ' ' + ratio.toFixed(2), { fill: colors.text });
       } else if (drawing.type === 'brush') {
         node(layer, 'polyline', { points: points.map(point => round(point.x) + ',' + round(point.y)).join(' '), ...stroke, 'stroke-linejoin': 'round' });
       } else if (drawing.type === 'text') {
@@ -519,7 +614,7 @@ export function createChart(host, state, env) {
           height: round(Math.abs(b.y - a.y)), fill: rising ? colors.up : colors.down, 'fill-opacity': 0.16 });
         const count = Math.round((finish.t - start.t) / geo.ms);
         note((a.x + b.x) / 2, Math.min(a.y, b.y) - 6, (rising ? '+' : '') + fmt(finish.p - start.p) + ' (' +
-          ((finish.p / start.p - 1) * 100).toFixed(2) + '%) · ' + count + ' bars', { fill: colors.text, 'text-anchor': 'middle', 'font-weight': 600 });
+          ((finish.p / start.p - 1) * 100).toFixed(2) + '%) · ' + count + ' ' + env.t('bars'), { fill: colors.text, 'text-anchor': 'middle', 'font-weight': 600 });
       }
       if (drawing.id === selected && drawing.type !== 'brush' && !env.store.settings.lock) {
         for (const point of points) node(layer, 'circle', { cx: round(point.x), cy: round(point.y), r: 5, fill: colors.panel, stroke: color, 'stroke-width': 2 });
@@ -529,6 +624,8 @@ export function createChart(host, state, env) {
 
   function add(drawing) {
     env.before();
+    if (env.store.settings.drawColor) drawing.color ??= env.store.settings.drawColor;
+    if (env.store.settings.drawWidth) drawing.width ??= env.store.settings.drawWidth;
     drawing.id = Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
     drawings().push(drawing);
     selected = drawing.id;
@@ -541,6 +638,7 @@ export function createChart(host, state, env) {
   function finishDraft(point) {
     if (!draft) return;
     if (point && draft.type !== 'brush') draft.points[1] = point;
+    if (draft.type === 'channel') draft.points.push({ t: draft.points[0].t, p: draft.points[0].p + (geo.main.high - geo.main.low) * 0.1 });
     if (draft.type === 'measure') {
       measure = draft;
       draft = null;
@@ -564,6 +662,29 @@ export function createChart(host, state, env) {
     drag = { kind: tool === 'brush' ? 'brush' : 'draft', x: position.x, y: position.y };
   }
 
+  // Price range helpers. A manual range replaces the automatic one until the scale is reset.
+  const yRange = () => view.price ?? { low: geo.main.low, high: geo.main.high };
+  const curve = range => state.log && range.low > 0 ? [Math.log, Math.exp] : [value => value, value => value];
+  function stretch(range, factor) {
+    const [forward, back] = curve(range);
+    const middle = (forward(range.low) + forward(range.high)) / 2;
+    const half = Math.max(1e-9, (forward(range.high) - forward(range.low)) / 2 * Math.min(50, Math.max(0.02, factor)));
+    return { low: back(middle - half), high: back(middle + half) };
+  }
+  function shift(range, pixels) {
+    const [forward, back] = curve(range);
+    const move = (forward(range.high) - forward(range.low)) / geo.mainH * pixels;
+    return { low: back(forward(range.low) + move), high: back(forward(range.high) + move) };
+  }
+  // Which part of the chart a point is in: a pane edge, the time axis, the price axis or the plot.
+  function zoneAt(position) {
+    const pane = geo.panes.find(item => Math.abs(position.y - item.top) < 6);
+    if (pane) return { kind: 'pane', pane };
+    if (position.y > geo.height - geo.foot) return { kind: 'time' };
+    if (position.x > geo.plot && position.y < geo.mainH) return { kind: 'price' };
+    return { kind: 'plot' };
+  }
+
   const local = event => {
     const bounds = svg.getBoundingClientRect();
     return { x: event.clientX - bounds.left, y: event.clientY - bounds.top };
@@ -582,12 +703,18 @@ export function createChart(host, state, env) {
   }
 
   svg.addEventListener('pointerdown', event => {
+    if (!geo) return;
     env.activate(api);
     const position = local(event);
     pointers.set(event.pointerId ?? 0, position);
     try { svg.setPointerCapture?.(event.pointerId); } catch {}
     if (pointers.size === 2) {
       drag = { kind: 'pinch', ...spread(), width: view.width };
+      return;
+    }
+    const zone = zoneAt(position);
+    if (zone.kind !== 'plot') {
+      drag = { kind: zone.kind, x: position.x, y: position.y, width: view.width, range: yRange(), pane: zone.pane };
       return;
     }
     const tool = env.tool();
@@ -604,13 +731,14 @@ export function createChart(host, state, env) {
       env.before();
       drag = { kind: 'drawing', hit, from: pointAt(position, false), original: structuredClone(hit.drawing.points) };
     } else {
-      drag = { kind: 'pan', x: position.x, end: view.end };
+      drag = { kind: 'pan', x: position.x, y: position.y, end: view.end, range: view.price };
     }
     env.changed('selection');
     renderDrawings();
   });
 
   svg.addEventListener('pointermove', event => {
+    if (!geo) return;
     const position = local(event);
     if (pointers.has(event.pointerId ?? 0)) pointers.set(event.pointerId ?? 0, position);
     if (drag?.kind === 'pinch' && pointers.size === 2) {
@@ -618,6 +746,20 @@ export function createChart(host, state, env) {
       view.width = drag.width;
       return zoomAt(now.gap / drag.gap, now.middle);
     }
+    if (drag?.kind === 'price') {
+      view.price = stretch(drag.range, Math.exp((position.y - drag.y) * 0.006));
+      return render();
+    }
+    if (drag?.kind === 'time') {
+      view.width = drag.width * Math.exp((position.x - drag.x) * 0.006);
+      clamp();
+      return render();
+    }
+    if (drag?.kind === 'pane') {
+      drag.pane.indicator.size = Math.min(4, Math.max(0.25, (drag.pane.height - (position.y - drag.y)) / drag.pane.unit));
+      return render();
+    }
+    if (!drag) svg.style.cursor = { pane: 'row-resize', price: 'ns-resize', time: 'ew-resize' }[zoneAt(position).kind] ?? '';
     if (draft) {
       if (draft.type === 'brush') {
         if (drag) draft.points.push(pointAt(position, false));
@@ -625,6 +767,7 @@ export function createChart(host, state, env) {
       renderDrawings();
     } else if (drag?.kind === 'pan') {
       view.end = drag.end - (position.x - drag.x) / view.width;
+      if (drag.range) view.price = shift(drag.range, position.y - drag.y);
       clamp();
       cross = null;
       return render();
@@ -644,11 +787,13 @@ export function createChart(host, state, env) {
   });
 
   function release(event) {
+    if (!geo) return pointers.clear();
     const position = local(event);
     pointers.delete(event.pointerId ?? 0);
     if (drag?.kind === 'draft' && draft && Math.hypot(position.x - drag.x, position.y - drag.y) > 8) finishDraft(pointAt(position));
     if (drag?.kind === 'brush') finishDraft();
     if (drag?.kind === 'drawing') env.changed('drawings');
+    if (drag?.kind === 'pane' || drag?.kind === 'price') env.changed('view');
     if (drag?.kind !== 'pinch' || pointers.size < 2) drag = null;
   }
   svg.addEventListener('pointerup', release);
@@ -662,15 +807,26 @@ export function createChart(host, state, env) {
   });
   svg.addEventListener('wheel', event => {
     event.preventDefault();
+    if (!geo) return;
+    if (zoneAt(local(event)).kind === 'price') {
+      view.price = stretch(yRange(), Math.exp(event.deltaY * 0.0015));
+      render();
+      return env.changed('view');
+    }
     if (event.shiftKey || Math.abs(event.deltaX) > Math.abs(event.deltaY)) {
       view.end += (event.deltaX || event.deltaY) / view.width;
       clamp();
       render();
     } else zoomAt(Math.exp(-event.deltaY * 0.0015), local(event).x);
   }, { passive: false });
-  svg.addEventListener('dblclick', () => api.fit());
+  svg.addEventListener('dblclick', event => {
+    if (!geo) return;
+    if (zoneAt(local(event)).kind === 'price') api.setAutoScale(true);
+    else api.fit();
+  });
   svg.addEventListener('focus', () => env.activate(api));
   svg.addEventListener('keydown', event => {
+    if (!geo) return;
     const key = event.key;
     if (key === 'Escape') {
       draft = measure = cross = selected = null;
@@ -686,6 +842,9 @@ export function createChart(host, state, env) {
       cross.y = geo.main.y(shown()[index].close);
       drawCross();
       env.crosshair(api, geo.t0 + index * geo.ms);
+    } else if (key === 'ArrowUp' || key === 'ArrowDown') {
+      event.preventDefault();
+      api.panPrice(key === 'ArrowUp' ? 0.1 : -0.1);
     } else if (key === '+' || key === '=') api.zoom(1.25);
     else if (key === '-') api.zoom(0.8);
     else if (key === 'Home') api.scrollTo(0);
@@ -700,7 +859,7 @@ export function createChart(host, state, env) {
     get selected() { return selected; },
     get crossIndex() { return cross?.index ?? null; },
     bars: () => raw().slice(0, length()),
-    visible: () => raw().slice(geo.first, geo.last + 1),
+    visible: () => geo ? raw().slice(geo.first, geo.last + 1) : [],
     plots: plotsOf,
     last: () => raw()[length() - 1],
     previous: () => raw()[length() - 2],
@@ -708,8 +867,10 @@ export function createChart(host, state, env) {
       const moved = (patch.symbol && patch.symbol !== state.symbol) || (patch.interval && patch.interval !== state.interval);
       Object.assign(state, patch);
       if (moved) {
+        markers = [];
         replay = selected = draft = measure = cross = null;
         view.end = null;
+        view.price = null;
       }
       buildLegend();
       render();
@@ -724,7 +885,7 @@ export function createChart(host, state, env) {
     patchIndicator(uid, patch) {
       const indicator = state.indicators.find(item => item.uid === uid);
       if (patch.params) Object.assign(indicator.params, patch.params);
-      if ('hidden' in patch) indicator.hidden = patch.hidden;
+      for (const key of ['hidden', 'colors', 'width', 'size']) if (key in patch) indicator[key] = patch[key];
       api.set({});
     },
     removeIndicator(uid) {
@@ -733,29 +894,52 @@ export function createChart(host, state, env) {
     toggleCompare(symbol) {
       api.set({ compare: state.compare.includes(symbol) ? state.compare.filter(item => item !== symbol) : [...state.compare, symbol] });
     },
-    zoom(factor) { zoomAt(factor, geo.plot); },
+    zoom(factor) { if (geo) zoomAt(factor, geo.plot); },
+    get autoScale() { return !view.price; },
+    setAutoScale(on) {
+      view.price = on || !geo ? null : yRange();
+      render();
+      env.changed('view');
+    },
+    // Below 1 stretches prices over more of the pane; above 1 compresses them.
+    scalePrice(factor) {
+      if (!geo) return;
+      view.price = stretch(yRange(), factor);
+      render();
+      env.changed('view');
+    },
+    panPrice(fraction) {
+      if (!geo) return;
+      view.price = shift(yRange(), fraction * geo.mainH);
+      render();
+      env.changed('view');
+    },
     scroll(barsBy) {
+      if (!geo) return;
       view.end += barsBy;
       clamp();
       render();
     },
     scrollTo(index) {
+      if (!geo) return;
       view.end = index + geo.plot / view.width;
       clamp();
       render();
     },
     fit(reset = true) {
-      if (reset) view.auto = true;
+      if (reset) [view.auto, view.price] = [true, null];
       view.end = length() + 3;
       render();
     },
     showBars(count) {
+      if (!geo) return;
       view.width = geo.plot / (count + 3);
       view.end = length() + 3;
       clamp();
       render();
     },
     goTo(time) {
+      if (!geo) return;
       const index = Math.round((time - geo.t0) / geo.ms);
       view.end = index + geo.plot / view.width / 2;
       clamp();
@@ -763,9 +947,20 @@ export function createChart(host, state, env) {
       render();
     },
     crossAt(time) {
+      if (!geo) return;
       cross = time === null ? null : { index: Math.round((time - geo.t0) / geo.ms), y: null };
       drawCross();
       readout(cross?.index ?? null);
+    },
+    setMarkers(list) {
+      markers = list;
+      render();
+    },
+    // Called when a live feed appends or updates the last bar.
+    tick() {
+      memo.clear();
+      if (geo && view.end >= geo.total) view.end += raw().length - geo.total;
+      render();
     },
     removeSelected() {
       if (!selected) return;
@@ -780,6 +975,7 @@ export function createChart(host, state, env) {
       renderDrawings();
     },
     replayStart(index) {
+      if (!geo) return;
       const total = raw().length;
       replay = Math.max(30, Math.min(total - 1, index ?? total - 100));
       view.end = replay + 3;
@@ -800,6 +996,7 @@ export function createChart(host, state, env) {
       env.changed('replay');
     },
     snapshot() {
+      if (!geo) return null;
       const colors = env.colors();
       const copy = svg.cloneNode(true);
       copy.setAttribute('xmlns', NS);
@@ -809,7 +1006,7 @@ export function createChart(host, state, env) {
       for (const [key, value] of Object.entries({ width: geo.width, height: geo.height, fill: colors.panel })) back.setAttribute(key, value);
       copy.prepend(back);
       node(copy, 'text', { x: 10, y: 20, fill: colors.text, 'font-size': 13, 'font-weight': 700 },
-        state.symbol + ' · ' + intervalLabel(state.interval) + ' · Meridian · simulated data');
+        state.symbol + ' · ' + intervalLabel(state.interval) + ' · Meridian · ' + env.t(instrument().live ? 'Live' : 'Simulated'));
       return { markup: copy.outerHTML, width: geo.width, height: geo.height, background: colors.panel };
     }
   };
