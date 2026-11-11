@@ -1,14 +1,19 @@
 // Workspace shell: toolbars, layouts, side panels, dialogs and persistence around the chart engine.
-import { instruments, liveInstruments, intervals, intervalLabel, find, series, price, csv, useLive } from './market.mjs';
+import { instruments, liveInstruments, intervals, intervalLabel, parseInterval, validInterval, find, series, price, csv, useLive, registerLive, listedInstruments, tickerLabel, engineError, loadEngine } from './market.mjs';
 import { registry, definition, rsi, sma, macd, atr } from './indicators.mjs';
+import { cleanPvsraAppearance, cleanPvsraAverages, pvsraAverageGroups, pvsraAverageSources, pvsraAverageTypes, pvsraComponents, pvsraSeparateVolume, pvsraStyleGroups, pvsraTimeframes } from './pvsra.mjs';
 import { compileScript, backtest, formulaHelp } from './script.mjs';
-import { createChart, styles, paneOf, palette } from './chart.mjs';
-import { createLive, liveTerms } from './live.mjs';
+import { createChart, styles, paneOf, palette, shapes, studyScale } from './chart.mjs';
+import { createLive, liveTerms, listSymbols, marketSources } from './live.mjs';
+import { createBroker, futuresPair } from './broker.mjs';
 import { locales, locale, detect, useLocale, t, L, translateTree } from './i18n.mjs';
+import { workspaceData } from './workspace-data.mjs';
 
 const $ = id => document.getElementById(id);
 const view = document.defaultView;
 const KEY = 'meridian.v2';
+const SYMBOLS = 'meridian.binance.symbols';
+const CATALOG = 'meridian.market.catalog.v1';
 const REPO = 'https://github.com/MFSCV/meridian';
 
 function h(tag, props = {}, ...children) {
@@ -79,8 +84,11 @@ const icons = {
   priceIn: 'M12 3v18M8 7l4-4 4 4M8 17l4 4 4-4', priceOut: 'M12 3v6M12 15v6M8 5l4 4 4-4M8 19l4-4 4 4',
   left: 'M15 5l-7 7 7 7', right: 'M9 5l7 7-7 7', latest: 'M6 5l7 7-7 7M18 5v14'
 };
-const icon = name => '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.7" ' +
-  'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="' + icons[name] + '"/></svg>';
+const icon = name => '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.5" ' +
+  'stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true"><path d="' + icons[name] + '"/></svg>';
+// The brand mark: a globe crossed by its meridian.
+const brandMark = '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">' +
+  '<circle cx="12" cy="12" r="8.2"/><path d="M12 1v22" stroke-width="2.2"/><path d="M4.6 8.5h14.8M4.6 15.5h14.8" stroke-width="1" opacity=".55"/></svg>';
 
 // Buttons carry an accessible name, a tooltip and an optional visible label.
 function button(id, { glyph, label, text, run, always }) {
@@ -114,9 +122,12 @@ const toolGroups = [
   { id: 'measure', tools: [['measure', L('Measure')], ['pricerange', L('Price range')], ['daterange', L('Date range')]] }
 ];
 const drawingNames = Object.fromEntries([...toolGroups.flatMap(group => group.tools), ['position', L('Position')]]);
-const panels = [['watch', 'list', L('Watchlist and details')], ['alerts', 'alert', L('Alerts')], ['data', 'table', L('Data window and object tree')],
-  ['screener', 'filter', L('Screener')], ['script', 'code', L('Formulas and strategies')], ['trade', 'wallet', L('Paper trading')],
-  ['insights', 'bulb', L('Insights')], ['community', 'share', L('Share and community')], ['sources', 'source', L('Official sources')]];
+// Each panel: name, icon, accessible label and the short label shown on its tab.
+const panels = [['watch', 'list', L('Watchlist and details'), L('Watchlist')], ['alerts', 'alert', L('Alerts'), L('Alerts')],
+  ['data', 'table', L('Data window and object tree'), L('Data window')], ['screener', 'filter', L('Screener'), L('Screener')],
+  ['script', 'code', L('Formulas and strategies'), L('Formula editor')], ['trade', 'wallet', L('Trading'), L('Trading')],
+  ['insights', 'bulb', L('Insights'), L('Insights')], ['community', 'share', L('Share and community'), L('Share and community')],
+  ['sources', 'source', L('Official sources'), L('Official sources')]];
 const ranges = [['1D', 5, 288, L('1 day in 5 minute bars')], ['5D', 15, 480, L('5 days in 15 minute bars')], ['1M', 60, 720, L('1 month in 1 hour bars')],
   ['3M', 240, 540, L('3 months in 4 hour bars')], [L('All'), 1440, 144, L('All data in daily bars')]];
 const columns = [['symbol', L('Symbol')], ['last', L('Last')], ['change', L('Chg%')], ['week', L('1W%')], ['month', L('1M%')], ['rsi', 'RSI'], ['trend', L('vs SMA 50')]];
@@ -126,34 +137,84 @@ const examples = [[L('Momentum'), 'close - sma(close, 20)'], [L('MACD line'), 'e
   [L('RSI reversal strategy'), 'strength = rsi(close, 14)\nplot strength\nbuy when crossover(strength, 30)\nsell when crossunder(strength, 70)']];
 const extraLabels = [L('Use light theme'), L('Long'), L('Short'), L('Buy'), L('Sell'), L('Formula')];
 const paramNames = { length: L('Length'), width: L('Width'), fast: L('Fast length'), slow: L('Slow length'), signal: L('Signal length'), smooth: L('Smoothing'),
-  span: L('Span length'), height: L('Height (% of the price pane)'), expression: L('Formula or script'), name: L('Name') };
+  span: L('Span length'), height: L('Height (% of the price pane)'), expression: L('Formula or script'), name: L('Name'),
+  zones: L('Show vector candle zones'), wicks: L('Zones include wicks'), limit: L('Maximum to keep'), daily: L('Yesterday, last week and daily open'), pivots: L('Pivot point and M levels'),
+  supports: L('Support and resistance levels 1 to 3'), adr: L('Average daily range'), psy: L('Weekly psy levels'), weekends: L('Show sessions at weekends'),
+  both: L('Draw both sides for every vector candle'), rows: L('Rows'),
+  vectors: L('Vector candles and zones'), emas: L('EMAs and cloud'), averages: L('Timeframe moving averages'),
+  levels: L('Price levels'), markets: L('Market sessions'), sessionFills: L('Show session fills'), liquidations: L('Estimated liquidation levels'),
+  vwap: L('VWAP and bands'), profile: L('Volume profile'), lower: L('Lower pane'),
+  vwapAnchor: L('VWAP anchor'), vwapMode: L('VWAP band calculation'), hideVwapDaily: L('Hide VWAP on daily and higher intervals'),
+  band1: L('VWAP band 1 multiplier'), band2: L('VWAP band 2 multiplier'), band3: L('VWAP band 3 multiplier'),
+  trimZones: L('Trim zones as price fills them'), adrLength: L('Daily range lookback'), liquidationLimit: L('Maximum liquidation levels'),
+  profileLength: L('Volume profile lookback'), oscillatorAverage: L('MACD moving average'), signalAverage: L('Signal moving average'),
+  historicalLevels: L('Show historical daily and weekly levels'), frankfurt: L('Show Frankfurt session') };
+// Parameters shown as a tick box instead of a number.
+const switches = new Set(['overlay', 'zones', 'wicks', 'daily', 'pivots', 'supports', 'adr', 'psy', 'weekends', 'both', ...Object.values(pvsraComponents),
+  'averages', 'hideVwapDaily', 'trimZones', 'historicalLevels', 'frankfurt', 'sessionFills']);
+const bandMultipliers = new Set(['band1', 'band2', 'band3']);
 
 const densities = { compact: L('Compact'), cozy: L('Comfortable'), roomy: L('Large') };
 const crosshairs = { cross: L('Cross'), vertical: L('Vertical line only'), none: L('Hidden') };
 const themes = { auto: L('Match device'), light: L('Light'), dark: L('Dark') };
-const sides = { right: L('Right'), left: L('Left') };
+const sides = { right: L('Right'), left: L('Left'), bottom: L('Bottom') };
 const strokes = { '': L('Default'), 1: '1', 2: '2', 3: '3', 4: '4' };
 // Top bar buttons that can be hidden from Settings.
 const optional = [['compare', L('Compare symbols')], ['style', L('Chart type')], ['indicators', L('Indicators and formulas')], ['alert', L('Create alert')],
-  ['replay', L('Bar replay')], ['undo', L('Undo drawing change')], ['redo', L('Redo drawing change')], ['layout', L('Layout setup')],
+  ['replay', L('Bar replay')], ['undo', L('Undo')], ['redo', L('Redo')], ['layout', L('Layout setup')],
   ['layouts', L('Save and load layouts')], ['snapshot', L('Download chart image')], ['fullscreen', L('Full screen')]];
+const orderKinds = { market: L('Market'), limit: L('Limit'), stop: L('Stop loss'), stopLimit: L('Stop limit'), takeProfit: L('Take profit'),
+  takeProfitLimit: L('Take profit limit'), trailing: L('Trailing stop') };
 const isColor = value => typeof value === 'string' && /^#[0-9a-f]{6}$/i.test(value);
 
 // State and persistence.
-const chartDefaults = () => ({ symbol: 'SPY', interval: 1440, style: 'Candles', log: false, compare: [], indicators: [{ uid: 'volume', id: 'volume', params: { height: 18 } }] });
+const defaultPvsra = () => ({ uid: 'pvsra-suite-default', id: 'pvsra-suite', params: { ...definition('pvsra-suite').params } });
+const defaultVolume = () => ({ uid: 'volume', id: 'volume', params: { ...definition('volume').params } });
+const chartDefaults = () => ({ symbol: 'BTCUSDT.P', interval: 60, style: 'Candles', log: false, compare: [], indicators: [defaultPvsra()] });
 const defaults = () => ({
-  theme: null, locale: null, look: { accent: null, up: null, down: null, density: 'cozy' }, hidden: [], panelWidth: null, layout: '1', active: 0, charts: [chartDefaults()], panel: (view?.innerWidth ?? 1200) < 760 ? null : 'watch',
-  watchlist: ['SPY', 'QQQ', 'AAPL', 'NVDA', 'BTCUSD', 'ETHUSDT.P', 'EURUSD'], alerts: [], log: [], drawings: {}, saved: {},
+  theme: null, locale: null, look: { accent: null, up: null, down: null, density: 'cozy' }, hidden: [], panelWidth: null, favoriteIntervals: [5, 15, 60, 240, 1440], layout: '1', active: 0, charts: [chartDefaults()], panel: (view?.innerWidth ?? 1200) < 760 ? null : 'watch',
+  watchlist: ['BTCUSDT.P', 'ETHUSDT.P', 'BTCUSDT', 'SPY', 'QQQ', 'AAPL', 'EURUSD'], watchFolders: [], watchLocations: {},
+  alerts: [], log: [], drawings: {}, saved: {}, tradeAccount: 'paper',
   paper: { cash: 100000, positions: {}, orders: [], pending: [] },
-  settings: { tz: 'UTC', grid: true, magnet: false, keep: false, lock: false, hide: false, syncSymbol: false, syncInterval: false, syncCross: true, live: false,
+  settings: { tz: 'UTC', grid: true, magnet: false, keep: false, lock: false, hide: false, syncSymbol: false, syncInterval: false, syncCross: true, live: true, feed: 'binance', confirmOrders: true,
     priceLine: true, legend: true, crosshair: 'cross', drawColor: null, drawWidth: null, panelSide: 'right', tools: true, bottom: true }
 });
 const list = value => Array.isArray(value) ? value : [];
-const cleanCharts = value => list(value).filter(chart => find(chart?.symbol) && intervals.includes(chart.interval)).map(chart => ({
+const watchLevels = [L('Section'), L('Group'), L('Subgroup')];
+
+function cleanWatchFolders(value) {
+  const valid = new Map();
+  for (const item of list(value)) {
+    if (typeof item?.id !== 'string' || !/^[a-z0-9-]{1,80}$/i.test(item.id) || typeof item.name !== 'string' || !item.name.trim()) continue;
+    valid.set(item.id, { id: item.id, name: item.name.trim().slice(0, 60), parent: typeof item.parent === 'string' ? item.parent : '', collapsed: item.collapsed === true });
+  }
+  const accepted = new Set();
+  let parents = new Set(['']);
+  for (const _ of watchLevels) {
+    parents = new Set([...valid.values()].filter(item => parents.has(item.parent) && !accepted.has(item.id)).map(item => item.id));
+    for (const id of parents) accepted.add(id);
+  }
+  return [...valid.values()].filter(item => accepted.has(item.id));
+}
+const cleanCharts = value => list(value).filter(chart => find(chart?.symbol) && validInterval(chart.interval)).map(chart => ({
   ...chartDefaults(), ...chart, style: styles.includes(chart.style) ? chart.style : 'Candles',
+  viewport: Number.isFinite(chart.viewport?.bars) && chart.viewport.bars > 0 && Number.isFinite(chart.viewport.offset) ? {
+    bars: Math.min(100_000, chart.viewport.bars), offset: Math.min(10_000_000, Math.max(-10_000_000, chart.viewport.offset)),
+    live: chart.viewport.live === true,
+    price: Number.isFinite(chart.viewport.price?.low) && Number.isFinite(chart.viewport.price?.high) &&
+      chart.viewport.price.high > chart.viewport.price.low ? { low: chart.viewport.price.low, high: chart.viewport.price.high } : null
+  } : undefined,
   compare: list(chart.compare).filter(symbol => find(symbol) && !find(symbol).live), indicators: list(chart.indicators).filter(item => definition(item?.id)).map(item => ({
-    ...item, params: { ...definition(item.id).params, ...item.params },
+    ...item, params: { ...definition(item.id).params, ...item.params,
+      ...(item.id === 'pvsra-suite' ? { averagesConfig: cleanPvsraAverages(item.params?.averagesConfig) } : {}) },
+    appearance: item.id === 'pvsra-suite' ? cleanPvsraAppearance(item.appearance) : undefined,
     size: Number.isFinite(item.size) ? Math.min(4, Math.max(0.25, item.size)) : undefined,
+    scaleZoom: Number.isFinite(item.scaleZoom) ? studyScale(item.scaleZoom) : undefined,
+    volumePane: item.id === 'pvsra-suite' && item.volumePane ? {
+      size: Number.isFinite(item.volumePane.size) ? Math.min(4, Math.max(0.25, item.volumePane.size)) : undefined,
+      scaleZoom: Number.isFinite(item.volumePane.scaleZoom) ? studyScale(item.volumePane.scaleZoom) : undefined
+    } : undefined,
+    volumeScale: item.volumeScale === 'percent' ? 'percent' : undefined,
     width: Number.isFinite(item.width) ? Math.min(6, Math.max(0.5, item.width)) : undefined,
     colors: item.colors && typeof item.colors === 'object' ? Object.fromEntries(Object.entries(item.colors).filter(([, value]) => isColor(value))) : undefined
   }))
@@ -163,17 +224,75 @@ const cleanDrawings = value => Object.fromEntries(Object.entries(value && typeof
   .map(([symbol, items]) => [symbol, list(items).filter(item => drawingNames[item?.type] && list(item.points).length &&
     item.points.every(point => Number.isFinite(point?.t) && Number.isFinite(point?.p)) && (item.type !== 'text' || typeof item.text === 'string'))]));
 
+function upgradePvsra(chart) {
+  if (chart.indicators.some(item => item.id === 'pvsra-suite')) return;
+  const suite = defaultPvsra();
+  const legacy = chart.indicators.find(item => item.id === 'pvsra' && item.uid === 'pvsra-default');
+  if (legacy) {
+    for (const key of ['zones', 'wicks', 'limit']) suite.params[key] = legacy.params[key];
+    if (legacy.hidden) suite.params.vectors = 0;
+  }
+  chart.indicators = chart.indicators.filter(item => item !== legacy);
+  for (const item of chart.indicators) {
+    const component = pvsraComponents[item.id];
+    if (component) suite.params[component] = 0;
+  }
+  const hasMacd = chart.indicators.some(item => item.id === 'macd' && !item.hidden);
+  if (hasMacd) suite.params.lower = 'Off';
+  chart.indicators.push(suite);
+}
+
+function migratePvsraChart(chart, version) {
+  if (![1, 2, 3].includes(version)) upgradePvsra(chart);
+  const suites = chart.indicators.filter(item => item.id === 'pvsra-suite');
+  const defaults = definition('pvsra-suite').params;
+  for (const suite of suites) {
+    const { zones, liquidations, lower, averages, ...inputs } = suite.params;
+    // Old presets saved their default values as explicit switches.
+    if (version !== 3 && zones === 1 && liquidations === 1 && !suite.appearance && !suite.colors &&
+        [defaults.lower, 'MACD', 'MACD + Volume'].includes(lower) &&
+        Object.entries(inputs).every(([key, value]) => value === defaults[key])) {
+      Object.assign(suite.params, { zones: defaults.zones, liquidations: defaults.liquidations });
+    }
+    if (averages === 1 && !suite.params.averagesConfig) suite.params.averages = defaults.averages;
+    if (lower === 'Volume' && !suite.volumePane) suite.volumePane = { size: suite.size, scaleZoom: suite.scaleZoom };
+  }
+  if (suites.length !== 1) return;
+  const [suite] = suites;
+  const volume = chart.indicators.find(item => item.id === 'volume' && item.uid === 'volume' && !item.params.overlay);
+  if (volume && (!suite.hidden || volume.hidden)) {
+    if (!volume.hidden) {
+      suite.params.lower = ['Off', 'Volume'].includes(suite.params.lower) ? 'Volume' : pvsraSeparateVolume;
+      suite.volumePane = { size: volume.size, scaleZoom: volume.scaleZoom };
+      suite.volumeScale = volume.volumeScale ?? suite.volumeScale;
+      const elements = suite.appearance?.elements;
+      if (elements?.Volume?.visible === false || elements?.Volume?.opacity === 0) delete elements.Volume;
+    } else if (suite.params.lower === pvsraSeparateVolume) suite.params.lower = 'MACD';
+    chart.indicators = chart.indicators.filter(item => item !== volume);
+  } else if (version === 1 && suite.params.lower === 'MACD + Volume' && !chart.indicators.some(item => item.id === 'volume')) {
+    suite.params.lower = pvsraSeparateVolume;
+    const elements = suite.appearance?.elements;
+    if (elements?.Volume?.visible === false || elements?.Volume?.opacity === 0) delete elements.Volume;
+  }
+  chart.indicators = chart.indicators.filter(item =>
+    !(item.id === 'sma' && item.uid === 'sma20' && item.params.length === 20 && !item.colors && item.width === undefined));
+}
+
 // Turns anything read from storage, a file or a link into a valid state.
 function normalize(saved) {
   const base = defaults();
   if (saved && typeof saved === 'object') {
     Object.assign(base, saved, { settings: { ...base.settings, ...saved.settings }, paper: { ...base.paper, ...saved.paper } });
   }
+  base.favoriteIntervals = [...new Set(list(base.favoriteIntervals).filter(validInterval))];
   base.charts = cleanCharts(base.charts);
   if (!base.charts.length) base.charts = [chartDefaults()];
-  if (!layouts[base.layout]) base.layout = '1';
+  if (!Object.hasOwn(layouts, base.layout)) base.layout = '1';
   if (![null, 'light', 'dark'].includes(base.theme)) base.theme = null;
   if (!locales.some(item => item.tag === base.locale)) base.locale = null;
+  // Binance became the default data feed in 0.3: workspaces saved before that are switched over once.
+  if (base.settings.feed !== 'binance') Object.assign(base.settings, { live: true, feed: 'binance' });
+  if (base.tradeAccount !== 'binance') base.tradeAccount = 'paper';
   if (!zones[base.settings.tz]) base.settings.tz = 'UTC';
   if (!crosshairs[base.settings.crosshair]) base.settings.crosshair = 'cross';
   if (!sides[base.settings.panelSide]) base.settings.panelSide = 'right';
@@ -187,13 +306,22 @@ function normalize(saved) {
   if ((view?.innerWidth ?? 1200) < 760) base.panel = null;
   if (base.panel && !panels.some(([name]) => name === base.panel)) base.panel = 'watch';
   base.active = Number.isInteger(base.active) && base.active >= 0 ? base.active : 0;
-  base.watchlist = list(base.watchlist).filter(find);
+  base.watchlist = [...new Set(list(base.watchlist).filter(find))];
+  base.watchFolders = cleanWatchFolders(base.watchFolders);
+  const folderIds = new Set(base.watchFolders.map(folder => folder.id));
+  base.watchLocations = Object.fromEntries(base.watchlist.flatMap(symbol => folderIds.has(base.watchLocations?.[symbol]) ? [[symbol, base.watchLocations[symbol]]] : []));
   base.alerts = list(base.alerts).filter(alert => find(alert?.symbol) && conditions[alert.condition] && alert.price > 0);
   base.log = list(base.log).filter(entry => typeof entry?.message === 'string');
   base.drawings = cleanDrawings(base.drawings);
   base.saved = Object.fromEntries(Object.entries(base.saved && typeof base.saved === 'object' ? base.saved : {})
-    .map(([name, entry]) => [name, { layout: layouts[entry?.layout] ? entry.layout : '1', charts: cleanCharts(entry?.charts) }])
+    .map(([name, entry]) => [name, { layout: Object.hasOwn(layouts, entry?.layout) ? entry.layout : '1', charts: cleanCharts(entry?.charts) }])
     .filter(([, entry]) => entry.charts.length));
+  if (base.pvsraVersion !== 4) {
+    for (const chart of [...base.charts, ...Object.values(base.saved).flatMap(entry => entry.charts)]) {
+      migratePvsraChart(chart, base.pvsraVersion);
+    }
+    base.pvsraVersion = 4;
+  }
   base.paper = {
     cash: Number.isFinite(base.paper.cash) ? base.paper.cash : 100000,
     positions: Object.fromEntries(Object.entries(base.paper.positions ?? {}).filter(([symbol, item]) => find(symbol) && Number.isFinite(item?.qty) && Number.isFinite(item?.avg))),
@@ -212,15 +340,32 @@ function load() {
       const old = JSON.parse(localStorage.getItem('meridian.v1'));
       if (old) {
         saved = { theme: old.theme ?? null, charts: [{ ...chartDefaults(), symbol: old.symbol, interval: old.interval * 60, style: old.style, indicators: [
-          ...(old.volume === false ? [] : chartDefaults().indicators), ...(old.average ? [{ uid: 'sma20', id: 'sma', params: { length: 20 } }] : [])] }] };
+          { ...defaultVolume(), hidden: old.volume === false }, ...(old.average ? [{ uid: 'sma20', id: 'sma', params: { length: 20 } }] : [])] }] };
       }
     }
   } catch {}
   return normalize(saved);
 }
 
-let state = load();
-await useLocale(state.locale ?? detect().tag);
+// Load cached markets before restoring saved charts and watchlists.
+let catalog = {};
+try {
+  const cached = JSON.parse(localStorage.getItem(CATALOG));
+  if (cached && typeof cached === 'object' && !Array.isArray(cached)) catalog = cached;
+  const known = JSON.parse(localStorage.getItem(SYMBOLS));
+  if (Array.isArray(known?.items)) registerLive(known.items);
+  for (const source of marketSources) {
+    if (Array.isArray(catalog[source]?.items)) registerLive(catalog[source].items);
+  }
+} catch {}
+
+const accountPath = './api/account/workspace';
+const account = await fetch(accountPath, { cache: 'no-store', signal: AbortSignal.timeout(1800) })
+  .then(response => response.ok ? response.json() : null).catch(() => null);
+const owner = typeof account?.owner === 'string' ? account.owner : null;
+let revision = account?.revision ?? 0;
+let state = owner ? normalize(account.data ?? account.preferences) : load();
+await useLocale(state.locale ?? document.documentElement.dataset.defaultLocale ?? detect().tag);
 document.documentElement.lang = locale.tag;
 document.documentElement.dir = locale.dir;
 translateTree(document.body);
@@ -232,14 +377,180 @@ let live = null;
 let refresh = null;
 const past = [];
 const future = [];
+let historyHead;
+let lastLocalSave;
 const lastTool = {};
 const sort = { key: 'change', down: true };
+let savedWorkspace = owner ? JSON.stringify(workspaceData(state)) : null;
+let pendingWorkspace = savedWorkspace;
+let saveTimer;
+let inFlight;
+let conflict;
+let applyingAccountWorkspace = false;
+let accountStatus = 'Workspace synced';
 
 function save() {
-  try { localStorage.setItem(KEY, JSON.stringify(state)); } catch {}
+  const snapshot = workspaceHistory();
+  if (snapshot !== historyHead) {
+    if (historyHead !== undefined) {
+      past.push(historyHead);
+      if (past.length > 80) past.shift();
+      future.length = 0;
+    }
+    historyHead = snapshot;
+  }
+  $('undo').disabled = past.length === 0;
+  $('redo').disabled = future.length === 0;
+  if (owner) {
+    if (applyingAccountWorkspace) return;
+    const data = JSON.stringify(workspaceData(state));
+    if (data === pendingWorkspace) return;
+    pendingWorkspace = data;
+    if (!conflict) {
+      setAccountStatus('Saving workspace…');
+      clearTimeout(saveTimer);
+      saveTimer = setTimeout(flushAccount, 600);
+    }
+    return;
+  }
+  const data = JSON.stringify(state);
+  if (data === lastLocalSave) return;
+  try {
+    localStorage.setItem(KEY, data);
+    lastLocalSave = data;
+  } catch {}
+}
+
+function setAccountStatus(message) {
+  accountStatus = message;
+  const status = $('workspace-sync-status');
+  if (status && status.textContent !== message) status.textContent = message;
+  const control = $('workspace-account');
+  if (control) control.title = message;
+}
+
+async function flushAccount(keepalive = false) {
+  clearTimeout(saveTimer);
+  if (inFlight) return inFlight.then(ok => ok && flushAccount(keepalive));
+  if (!owner || pendingWorkspace === savedWorkspace) return true;
+  if (conflict) return false;
+  const snapshot = pendingWorkspace;
+  const body = JSON.stringify({ owner, revision, data: JSON.parse(snapshot) });
+  const size = new TextEncoder().encode(body).length;
+  if (size > 512 * 1024) {
+    setAccountStatus('Workspace exceeds the 512 KB account limit.');
+    return false;
+  }
+  inFlight = (async () => {
+    try {
+      const response = await fetch(accountPath, { method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body, keepalive: keepalive && size < 60 * 1024, ...(keepalive ? {} : { signal: AbortSignal.timeout(8000) }) });
+      if (response.status === 401 || response.status === 403) {
+        setAccountStatus('Account session changed. Sign in again to sync.');
+        return false;
+      }
+      const result = await response.json();
+      if (response.status === 409 && result.owner === owner) {
+        if (JSON.stringify(result.data) !== snapshot) {
+          conflict = result;
+          setAccountStatus('Sync conflict. Open Account to choose a version.');
+          toast(accountStatus);
+          return false;
+        }
+      } else if (!response.ok || !Number.isSafeInteger(result.revision)) throw new Error('Workspace save failed');
+      revision = result.revision;
+      savedWorkspace = snapshot;
+      if (pendingWorkspace === snapshot) setAccountStatus('Workspace synced');
+      return true;
+    } catch {
+      setAccountStatus('Workspace changes are waiting to sync. Open Account to retry.');
+      return false;
+    }
+  })();
+  try {
+    const ok = await inFlight;
+    if (ok && pendingWorkspace !== snapshot) saveTimer = setTimeout(flushAccount, 0);
+    return ok;
+  } finally {
+    inFlight = null;
+  }
+}
+
+function restoreAccountWorkspace(data) {
+  state = normalize(workspaceData(data));
+  past.length = future.length = 0;
+  historyHead = undefined;
+  applyTheme();
+  buildCharts();
+  applyPanel();
+  afterChange();
+  renderPanel(true);
+}
+
+function useAccountWorkspace(remote) {
+  const data = remote.data ?? remote.preferences ?? {};
+  revision = remote.revision;
+  conflict = null;
+  applyingAccountWorkspace = true;
+  try {
+    restoreAccountWorkspace(data);
+    savedWorkspace = pendingWorkspace = JSON.stringify(workspaceData(state));
+  } finally {
+    applyingAccountWorkspace = false;
+  }
+  setAccountStatus('Workspace synced');
+  if ((state.locale ?? document.documentElement.dataset.defaultLocale ?? detect().tag) !== locale.tag) view.location.reload();
+}
+
+function workspaceAccountDialog() {
+  dialog('Your Meridian account', [
+    hint(accountStatus),
+    actions(h('a', { href: './account.html', text: 'Open personal area' }),
+      conflict && h('button', { text: 'Use account version', onclick: () => {
+        closeDialog();
+        useAccountWorkspace(conflict);
+      } }),
+      conflict && h('button', { text: 'Save this device’s version', onclick: () => {
+        revision = conflict.revision;
+        conflict = null;
+        closeDialog();
+        void flushAccount();
+      } }),
+      !conflict && pendingWorkspace !== savedWorkspace && h('button', { text: 'Retry sync', onclick: () => {
+        closeDialog();
+        void flushAccount();
+      } }),
+      revision === 0 && !conflict && pendingWorkspace === savedWorkspace && h('button', {
+        text: 'Import this browser’s guest workspace', onclick: () => {
+          closeDialog();
+          restoreAccountWorkspace(load());
+          void flushAccount();
+        }
+      }))
+  ]);
 }
 const active = () => charts[state.active] ?? charts[0];
-const universe = () => [...instruments, ...(state.settings.live ? liveInstruments : [])];
+// Instruments with loaded statistics: the simulated set, the main Binance pairs and any other pair on the watchlist.
+function universe() {
+  if (!state.settings.live) return instruments;
+  const extra = state.watchlist.map(find).filter(item => item?.live && !liveInstruments.includes(item));
+  const taken = new Set([...liveInstruments, ...extra].map(item => item.symbol));
+  return [...instruments.filter(item => !taken.has(item.symbol)), ...liveInstruments, ...extra];
+}
+// Keep the last successful directory for each venue through independent outages.
+let catalogRefresh;
+let updateSymbolSearch;
+function refreshSymbols() {
+  const sources = marketSources.filter(source => Date.now() - (catalog[source]?.at ?? 0) >= 3_600_000);
+  if (!sources.length) return Promise.resolve();
+  catalogRefresh ??= listSymbols(undefined, sources, (source, items) => {
+    registerLive(items, source);
+    catalog[source] = { at: Date.now(), items };
+    try { localStorage.setItem(CATALOG, JSON.stringify(catalog)); } catch {}
+    updateSymbolSearch?.();
+  }).finally(() => { catalogRefresh = null; });
+  return catalogRefresh;
+}
 
 // Theme and formatting.
 const deviceTheme = matchMedia('(prefers-color-scheme: dark)');
@@ -277,6 +588,7 @@ function applyLook() {
   }
   root.dataset.density = state.look.density;
   document.body.dataset.side = state.settings.panelSide;
+  $('panel-grip').setAttribute('aria-orientation', state.settings.panelSide === 'bottom' ? 'horizontal' : 'vertical');
   document.body.dataset.tools = String(state.settings.tools !== false);
   document.body.dataset.bottom = String(state.settings.bottom !== false);
   for (const id of [...optional.map(([name]) => name), ...panels.map(([name]) => 'panel-' + name)]) {
@@ -285,13 +597,14 @@ function applyLook() {
   colorCache = null;
 }
 const formats = new Map();
-function time(value, kind) {
+function time(value, kind, showSeconds = false) {
   const timeZone = state.settings.tz === 'local' ? undefined : state.settings.tz;
-  const key = kind + timeZone;
+  const key = kind + timeZone + showSeconds;
   if (!formats.has(key)) {
+    const clock = { hour: '2-digit', minute: '2-digit', second: showSeconds ? '2-digit' : undefined, hourCycle: 'h23', timeZone };
     formats.set(key, new Intl.DateTimeFormat(locale.tag, kind === 'day' ? { day: 'numeric', month: 'short', timeZone }
-      : kind === 'time' ? { hour: '2-digit', minute: '2-digit', hourCycle: 'h23', timeZone }
-      : { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', hourCycle: 'h23', timeZone }));
+      : kind === 'time' ? clock
+      : { day: '2-digit', month: 'short', year: 'numeric', ...clock }));
   }
   return formats.get(key).format(value);
 }
@@ -321,7 +634,7 @@ function quote(symbol) {
   const chart = charts.find(item => item.state.symbol === symbol && item.replaying);
   if (chart) return chart.last().close;
   if (find(symbol).live) return live?.last(symbol)?.close ?? null;
-  return stats(find(symbol)).last;
+  return stats(find(symbol))?.last ?? null;
 }
 
 function toast(message) {
@@ -396,58 +709,278 @@ const field = (label, control) => h('label', { class: 'field' }, h('span', { tex
 const actions = (...controls) => h('div', { class: 'actions' }, controls);
 const hint = (text, ...more) => h('p', { class: 'hint', text }, more);
 
-function symbolDialog(title, pick, { stay, query = '', simulatedOnly } = {}) {
+function symbolDialog(title, pick, { stay, query = '', simulatedOnly, destination } = {}) {
   const input = h('input', { type: 'search', id: 'symbol-query', placeholder: t('Symbol or name'), 'aria-label': t('Search symbols'), value: query });
   const kind = h('select', { 'aria-label': t('Instrument type') }, [h('option', { value: '', text: t('All types') }),
     ...typeNames.map(name => h('option', { value: name, text: t(name) }))]);
+  const source = h('select', { id: 'symbol-source', 'aria-label': t('Market source') }, [
+    h('option', { value: '', text: t('All sources') }),
+    h('option', { value: 'simulated', text: t('Simulated') }),
+    ...marketSources.map(name => h('option', { value: name, text: name }))]);
   const results = h('div', { class: 'results', id: 'symbol-results' });
+  const summary = h('p', { class: 'hint', role: 'status' });
+  const more = h('button', { type: 'button', text: t('Show more symbols') });
+  const pageSize = 60;
+  let limit = pageSize;
+  const compact = value => value.toLowerCase().replace(/[^a-z0-9]/g, '');
   const fill = () => {
-    const words = input.value.trim().toLowerCase();
-    const found = universe().filter(item => (item.symbol + ' ' + item.name).toLowerCase().includes(words) &&
-      (!kind.value || item.type === kind.value) && !(simulatedOnly && item.live));
-    results.replaceChildren(...found.map(item => {
-      const data = stats(item);
+    const query = input.value.trim().toLowerCase();
+    const words = query.split(/\s+/).filter(Boolean);
+    const key = compact(query);
+    const main = universe();
+    const known = new Set(main.map(item => item.symbol));
+    const all = state.settings.live && !simulatedOnly ? [...main, ...listedInstruments().filter(item => !known.has(item.symbol))] : main;
+    const found = all.flatMap(item => {
+      if ((kind.value && item.type !== kind.value) || (simulatedOnly && item.live) ||
+          (source.value && (item.source ?? 'simulated') !== source.value)) return [];
+      const symbol = item.symbol.toLowerCase();
+      const pair = compact(item.name.replace(/ perpetual$/, ''));
+      const searchable = [symbol, item.name, item.source ?? 'simulated'].join(' ').toLowerCase();
+      if (!words.every(word => searchable.includes(word)) && !(key && pair.includes(key))) return [];
+      const score = symbol === query ? 0 : pair === key ? 1 : symbol.startsWith(query) ? 2 : 3;
+      return [{ item, score }];
+    }).sort((a, b) => a.score - b.score);
+    summary.textContent = t('{0} matching symbols', found.length);
+    more.hidden = limit >= found.length;
+    results.replaceChildren(...found.slice(0, limit).map(({ item }) => {
+      const data = known.has(item.symbol) ? stats(item) : null;
       return h('button', { type: 'button', class: 'result', 'data-symbol': item.symbol, onclick: () => {
         if (!stay) closeDialog();
         pick(item);
-      } }, h('strong', { text: item.symbol }), h('span', { text: item.name }), h('small', { text: item.live ? t('Live') + ' · ' + item.source : t(item.type) }),
+      } }, h('strong', { text: tickerLabel(item) }), h('span', { text: item.name }), h('small', { text: item.live ? t('Live') + ' · ' + item.source : t(item.type) + ' · ' + t('Simulated') }),
       h('span', { class: 'num', text: data ? price(data.last, item) : '…' }), h('span', { class: 'num ' + (data ? tone(data.change) : ''), text: data ? signed(data.change) : '' }));
     }));
     if (!found.length) results.append(hint(t('No matching symbols.')));
   };
-  input.oninput = kind.onchange = fill;
-  dialog(title, [h('div', { class: 'row' }, input, kind), results]);
+  input.oninput = kind.onchange = source.onchange = () => { limit = pageSize; fill(); };
+  more.onclick = () => { limit += pageSize; fill(); };
+  dialog(title, [h('div', { class: 'row symbol-search-fields' }, input, kind, state.settings.live && !simulatedOnly ? source : null),
+    destination ? field(t('Destination'), destination) : null, summary, results, more]);
   fill();
+  if (state.settings.live && !simulatedOnly) {
+    updateSymbolSearch = () => {
+      if (input.isConnected) fill();
+      else updateSymbolSearch = null;
+    };
+    refreshSymbols();
+  }
   input.focus();
 }
 
 const indicatorName = indicator => indicator.id === 'formula' ? indicator.params.name : t(definition(indicator.id).name);
+const paneLabel = pane => pane === 'overlay' ? L('On the price pane') : pane === 'both' ? L('Price and lower panes') : L('In its own pane');
+
+function pvsraSettings(indicator, inputs) {
+  const checkbox = (label, checked) => h('input', { type: 'checkbox', checked, 'aria-label': label });
+  const check = (label, control) => h('label', { class: 'check' }, control, label);
+  const inputGroups = [
+    [L('MACD and volume'), ['lower', 'fast', 'slow', 'signal', 'oscillatorAverage', 'signalAverage']],
+    [L('Candle colors and zones'), ['vectors', 'zones', 'wicks', 'trimZones', 'limit']],
+    [L('Moving averages'), ['emas', 'averages']],
+    [L('Price levels'), ['levels', 'daily', 'psy', 'supports', 'adrLength', 'historicalLevels']],
+    [L('Market sessions'), ['markets', 'sessionFills', 'weekends', 'frankfurt']],
+    [L('Estimated liquidation levels'), ['liquidations', 'both', 'liquidationLimit']],
+    [L('VWAP and bands'), ['vwap', 'vwapAnchor', 'vwapMode', 'band1', 'band2', 'band3', 'hideVwapDaily']],
+    [L('Volume profile'), ['profile', 'profileLength', 'rows']]
+  ];
+  const inputByKey = new Map(inputs.map(input => [input.querySelector('[data-key]').dataset.key, input]));
+  const controlFor = key => inputByKey.get(key).querySelector('[data-key]');
+  const averages = [];
+  const averageSections = pvsraAverageGroups.map(([label, slots]) => h('details', { class: 'study-style-group' },
+    h('summary', { text: t(label) }), ...slots.map(slot => {
+      const value = { ...slot, ...indicator.params.averagesConfig?.[slot.key] };
+      const name = t(slot.label);
+      const enabled = checkbox(name + ' · ' + t('Show'), value.enabled);
+      const length = h('input', { type: 'number', min: 1, max: 5000, step: 1, required: true, value: value.length, 'aria-label': name + ' · ' + t('Length') });
+      const select = (label, selected, choices) => h('select', { 'aria-label': name + ' · ' + label },
+        choices.map(([key, label]) => h('option', { value: key, text: t(label), selected: key === selected })));
+      const type = select(t('Average type'), value.type, pvsraAverageTypes.map(type => [type, type]));
+      const source = select(t('Price source'), value.source, pvsraAverageSources);
+      averages.push({ slot, enabled, length, type, source });
+      return h('fieldset', { class: 'study-style-row', 'data-average': slot.key }, h('legend', {}, enabled, name),
+        field(t('Length'), length), field(t('Average type'), type), field(t('Price source'), source));
+    })));
+  const sections = inputGroups.map(([label, keys], index) => h('details', { class: 'study-style-group', open: index === 0 },
+    h('summary', { text: t(label) }), h('div', { class: 'study-settings-panel' }, keys.map(key => inputByKey.get(key)),
+      keys.includes('averages') ? averageSections : [])));
+  const panels = [
+    h('div', { class: 'study-settings-panel', id: 'study-inputs' }, sections),
+    h('div', { class: 'study-settings-panel', id: 'study-style', hidden: true }),
+    h('div', { class: 'study-settings-panel', id: 'study-visibility', hidden: true })
+  ];
+  const tabs = [L('Inputs'), L('Style'), L('Visibility')].map((label, index) => h('button', {
+    type: 'button', text: t(label), 'aria-controls': panels[index].id, 'aria-pressed': String(index === 0), onclick: () => {
+      panels.forEach((panel, i) => { panel.hidden = i !== index; press(tabs[i], i === index); });
+    }
+  }));
+  const rows = [];
+  const averageSlots = new Map(averages.map(({ slot, enabled }) => [slot.key, enabled]));
+  const dailyLevels = new Set(['level:Daily Open', 'level:yDO', 'level:YDay Hi', 'level:YDay Lo', 'level:LWeek Hi', 'level:LWeek Lo']);
+  const enabledByInputs = key => {
+    if (key.startsWith('level:')) return controlFor('levels').checked &&
+      (!dailyLevels.has(key) || controlFor('daily').checked) && (!key.startsWith('level:Psy-') || controlFor('psy').checked);
+    if (key.startsWith('zone:')) return controlFor('vectors').checked && controlFor('zones').checked;
+    if (key.startsWith('session-fill:')) return controlFor('markets').checked && controlFor('sessionFills').checked;
+    if (averageSlots.has(key)) return controlFor('averages').checked && averageSlots.get(key).checked;
+    if (key.startsWith('liquidation:') || key === 'break-even') return controlFor('liquidations').checked;
+    return true;
+  };
+  const updateStyleVisibility = () => {
+    for (const row of rows) {
+      row.visible.disabled = !enabledByInputs(row.key);
+      row.visible.checked = !row.visible.disabled && row.shown;
+    }
+  };
+  const groups = pvsraStyleGroups.map(([group, elements]) => h('details', { class: 'study-style-group' },
+    h('summary', { text: t(group) }), elements.map(({ key, label, color, kind, opacity, legacyKey }) => {
+      const style = indicator.appearance?.elements?.[key] ?? {};
+      const previousColor = indicator.colors?.[key] ?? indicator.colors?.[legacyKey];
+      const name = t(label);
+      const labelFor = control => name + ' · ' + control;
+      const visible = checkbox(labelFor(t('Show')), style.visible !== false);
+      const custom = checkbox(labelFor(t('Custom color')), Boolean(style.color ?? previousColor));
+      const swatch = h('input', { type: 'color', value: style.color ?? previousColor ?? color, disabled: !custom.checked,
+        'aria-label': labelFor(t('Color')) });
+      custom.onchange = () => { swatch.disabled = !custom.checked; };
+      const alpha = h('input', { type: 'number', min: 0, max: 100, step: 1, value: style.opacity, placeholder: opacity, 'aria-label': labelFor(t('Opacity (%)')) });
+      const width = kind === 'fill' ? null : h('input', { type: 'number', min: 0.5, max: 6, step: 0.1, value: style.width, 'aria-label': labelFor(t('Line width')) });
+      const dash = kind === 'fill' ? null : h('select', { 'aria-label': labelFor(t('Line style')) },
+        [['', L('Default')], ['solid', L('Solid')], ['dashed', L('Dashed')], ['dotted', L('Dotted')]].map(([value, label]) =>
+          h('option', { value, text: t(label), selected: (style.dash ?? '') === value })));
+      const labels = kind === 'level' ? checkbox(labelFor(t('Show label')), style.labels !== false) : null;
+      const row = { key, color, visible, shown: style.visible !== false, custom, swatch, alpha, width, dash, labels };
+      visible.onchange = () => { row.shown = visible.checked; };
+      rows.push(row);
+      return h('fieldset', { class: 'study-style-row' }, h('legend', {}, visible, name),
+        h('div', { class: 'study-style-color' }, check(t('Custom color'), custom), swatch),
+        field(t('Opacity (%)'), alpha), width ? field(t('Line width'), width) : null,
+        dash ? field(t('Line style'), dash) : null, labels ? check(t('Show label'), labels) : null);
+    })));
+  const values = checkbox(t('Show values in the legend'), indicator.appearance?.values !== false);
+  const timeframes = pvsraTimeframes.map(([key, name]) => [key, t(name), checkbox(t(name), indicator.appearance?.timeframes?.includes(key) ?? true)]);
+  const boundary = (value, placeholder) => h('input', { value: value ? intervalLabel(value) : '', placeholder });
+  const min = boundary(indicator.appearance?.min, '5m');
+  const max = boundary(indicator.appearance?.max, '4h');
+  const rangeError = h('p', { class: 'error', role: 'alert' });
+  const reset = h('button', { type: 'button', text: t('Reset style'), onclick: () => {
+    for (const row of rows) {
+      row.shown = true;
+      row.custom.checked = false;
+      row.swatch.value = row.color;
+      row.swatch.disabled = true;
+      row.alpha.value = '';
+      if (row.width) row.width.value = '';
+      if (row.dash) row.dash.value = '';
+      if (row.labels) row.labels.checked = true;
+    }
+    values.checked = true;
+    updateStyleVisibility();
+  } });
+  panels[0].addEventListener('change', updateStyleVisibility);
+  panels[0].append(actions(h('button', { type: 'button', text: 'Reset inputs', onclick: () => {
+    for (const [key, value] of Object.entries(definition('pvsra-suite').params)) {
+      const control = controlFor(key);
+      if (control.type === 'checkbox') control.checked = Boolean(value);
+      else control.value = value;
+    }
+    for (const { slot, enabled, length, type, source } of averages) {
+      enabled.checked = slot.enabled;
+      length.value = slot.length;
+      type.value = slot.type;
+      source.value = slot.source;
+    }
+    updateStyleVisibility();
+  } })));
+  updateStyleVisibility();
+  panels[1].append(check(t('Show values in the legend'), values), ...groups, reset);
+  panels[2].append(h('fieldset', { class: 'study-timeframes' }, h('legend', { text: t('Show on these intervals') }),
+    timeframes.map(([, name, control]) => check(name, control))), field(t('Minimum interval'), min), field(t('Maximum interval'), max), rangeError);
+  return {
+    body: [h('div', { class: 'study-settings-tabs', role: 'group', 'aria-label': t('Indicator settings') }, tabs), ...panels],
+    read() {
+      const invalid = averages.find(row => !row.length.validity.valid);
+      if (invalid) {
+        tabs[0].click();
+        for (let node = invalid.length.parentElement; node && node !== panels[0]; node = node.parentElement) {
+          if (node.tagName === 'DETAILS') node.open = true;
+        }
+        invalid.length.reportValidity();
+        return null;
+      }
+      const lower = min.value.trim() ? parseInterval(min.value) : undefined;
+      const upper = max.value.trim() ? parseInterval(max.value) : undefined;
+      if (lower === null || upper === null || (lower ?? 0) > (upper ?? Infinity)) {
+        tabs[2].click();
+        rangeError.textContent = t('Enter valid intervals in ascending order.');
+        (lower === null ? min : max).focus();
+        return null;
+      }
+      rangeError.textContent = '';
+      for (const row of rows) {
+        if (!row.alpha.validity.valid || (row.width && !row.width.validity.valid)) {
+          tabs[1].click();
+          const control = !row.alpha.validity.valid ? row.alpha : row.width;
+          control.closest('details').open = true;
+          control.reportValidity();
+          return null;
+        }
+      }
+      const elements = Object.fromEntries(rows.map(({ key, shown, custom, swatch, alpha, width, dash, labels }) => [key, {
+        visible: shown, color: custom.checked ? swatch.value : undefined, opacity: alpha.value === '' ? undefined : Number(alpha.value),
+        width: width?.value ? Number(width.value) : undefined, dash: dash?.value, labels: labels?.checked
+      }]));
+      return {
+        appearance: cleanPvsraAppearance({ elements, values: values.checked, min: lower, max: upper,
+          timeframes: timeframes.filter(([, , control]) => control.checked).map(([key]) => key) }),
+        averagesConfig: cleanPvsraAverages(Object.fromEntries(averages.map(({ slot, enabled, length, type, source }) =>
+          [slot.key, { enabled: enabled.checked, length: Number(length.value), type: type.value, source: source.value }])))
+      };
+    }
+  };
+}
+
 function configure(chart, indicator) {
   const spec = definition(indicator.id);
   const error = h('p', { role: 'alert', class: 'error' });
-  const inputs = Object.entries(indicator.params).map(([key, value]) => {
-    const control = key === 'overlay' ? h('input', { type: 'checkbox', checked: Boolean(value) })
-      : typeof spec.params[key] === 'number' ? h('input', { type: 'number', min: key === 'width' ? 0.1 : 1, max: 500, step: key === 'width' ? 0.1 : 1, value })
+  const inputs = Object.entries({ ...spec.params, ...indicator.params }).filter(([key]) => key !== 'averagesConfig').map(([key, value]) => {
+    const options = spec.choices?.[key];
+    const control = options ? h('select', {}, options.map(option => h('option', { value: option, text: t(option), selected: value === option })))
+      : switches.has(key) ? h('input', { type: 'checkbox', checked: Boolean(value) })
+      : typeof spec.params[key] === 'number' ? h('input', { type: 'number', min: bandMultipliers.has(key) ? 0 : key === 'width' ? 0.1 : 1,
+        max: 500, step: bandMultipliers.has(key) ? 0.5 : key === 'width' ? 0.1 : 1, value })
       : key === 'expression' ? h('textarea', { rows: 6, spellcheck: 'false', text: value }) : h('input', { type: 'text', value, spellcheck: 'false' });
     control.dataset.key = key;
-    return key === 'overlay' ? h('label', { class: 'check' }, control, t('Draw on the price pane')) : field(t(paramNames[key] ?? key), control);
+    return switches.has(key) ? h('label', { class: 'check' }, control, t(key === 'overlay' ? L('Draw on the price pane') : paramNames[key])) : field(t(paramNames[key] ?? key), control);
   });
   // Colour and width apply to the lines an indicator draws.
-  const swatches = chart.plots(indicator).map((plot, order) => {
-    if (['volume', 'histogram'].includes(plot.kind)) return null;
-    const control = h('input', { type: 'color', value: indicator.colors?.[order] ?? palette[plot.color ?? 0] });
-    control.dataset.plot = order;
+  const advanced = indicator.id === 'pvsra-suite' ? pvsraSettings(indicator, inputs) : null;
+  const swatches = (advanced ? [] : chart.plots(indicator)).map((plot, order) => {
+    if (['volume', 'histogram'].includes(plot.kind) || shapes.has(plot.kind)) return null;
+    const key = plot.key ?? order;
+    const control = h('input', { type: 'color', value: indicator.colors?.[key] ?? plot.stroke ?? palette[plot.color ?? 0] });
+    control.dataset.plot = key;
     return field(t('Colour of {0}', plot.label), control);
   }).filter(Boolean);
   const width = h('select', { id: 'line-width' }, [1, 1.4, 2, 3, 4].map(value => h('option', { value, text: String(value), selected: value === (indicator.width ?? 1.4) })));
-  dialog(indicatorName(indicator), [...inputs, swatches.length ? h('h3', { text: t('Style') }) : null, ...swatches,
-    swatches.length ? field(t('Line width'), width) : null, error, actions(
+  const volumeScale = (indicator.id === 'volume' || indicator.id === 'pvsra-suite')
+    ? h('fieldset', { id: 'volume-scale' }, h('legend', { text: 'Volume pane scale' }),
+      ...[['absolute', 'Volume units'], ['percent', '% of largest visible candle volume']].map(([value, label]) =>
+        h('label', { class: 'check' }, h('input', { type: 'radio', name: 'volume-scale', value,
+          checked: value === (indicator.volumeScale ?? 'absolute') }), label)))
+    : null;
+  dialog(indicatorName(indicator), [...(advanced?.body ?? inputs), swatches.length ? h('h3', { text: t('Style') }) : null, ...swatches,
+    swatches.length ? field(t('Line width'), width) : null, volumeScale, error, actions(
     h('button', { type: 'button', class: 'primary', text: t('Apply'), onclick: () => {
       const params = {};
       for (const control of $('dialog-body').querySelectorAll('[data-key]')) {
         const key = control.dataset.key;
         params[key] = control.type === 'checkbox' ? Number(control.checked) : control.type === 'number' ? Number(control.value) : control.value.trim();
-        if (control.type === 'number' && !(params[key] >= Number(control.min) && params[key] <= 500 && (key === 'width' || Number.isInteger(params[key])))) {
+        if (control.type === 'number' && !(params[key] >= Number(control.min) && params[key] <= 500 && (key === 'width' || bandMultipliers.has(key) || Number.isInteger(params[key])))) {
+          if (advanced) {
+            $('dialog-body').querySelector('[aria-controls="study-inputs"]').click();
+            control.closest('details').open = true;
+            control.focus();
+          }
           error.textContent = t('Enter a value from {0} to 500 for {1}.', control.min, t(paramNames[key] ?? key));
           return;
         }
@@ -458,9 +991,16 @@ function configure(chart, indicator) {
         error.textContent = problem.message;
         return;
       }
-      const colors = { ...indicator.colors };
-      for (const control of $('dialog-body').querySelectorAll('[data-plot]')) colors[control.dataset.plot] = control.value;
-      chart.patchIndicator(indicator.uid, { params, colors, width: Number(width.value) });
+      const scale = volumeScale ? { volumeScale: volumeScale.querySelector('input:checked')?.value === 'percent' ? 'percent' : undefined } : {};
+      if (advanced) {
+        const settings = advanced.read();
+        if (!settings) return;
+        chart.patchIndicator(indicator.uid, { params: { ...params, averagesConfig: settings.averagesConfig }, appearance: settings.appearance, colors: undefined, ...scale });
+      } else {
+        const colors = { ...indicator.colors };
+        for (const control of $('dialog-body').querySelectorAll('[data-plot]')) colors[control.dataset.plot] = control.value;
+        chart.patchIndicator(indicator.uid, { params, colors, width: Number(width.value), ...scale });
+      }
       closeDialog();
     } }))]);
 }
@@ -478,14 +1018,19 @@ function indicatorsDialog() {
           closeDialog();
           return openPanel('script', true);
         }
+        if (item.id === 'pvsra-suite') {
+          const existing = chart.state.indicators.find(indicator => indicator.id === item.id);
+          if (existing) return configure(chart, existing);
+        }
         chart.addIndicator(item.id);
         toast(t('{0} added to {1}', t(item.name), chart.state.symbol));
         fill();
       } }, h('strong', { text: t(item.name) }),
-      h('small', { text: t(item.id === 'formula' ? L('Opens the editor') : item.pane === 'overlay' ? L('On the price pane') : L('In its own pane')) }))));
+      h('small', { text: t(item.id === 'formula' ? L('Opens the editor') : paneLabel(item.pane)) }))));
     current.replaceChildren(...chart.state.indicators.map(item => h('div', { class: 'result' },
       h('strong', { text: indicatorName(item) }),
-      h('small', { text: Object.entries(item.params).filter(([key]) => !['expression', 'name', 'overlay'].includes(key)).map(([, value]) => value).join(' · ') }),
+      h('small', { text: item.id === 'pvsra-suite' ? t(item.params.lower)
+        : Object.entries(item.params).filter(([key]) => !['expression', 'name', 'overlay'].includes(key)).map(([, value]) => value).join(' · ') }),
       Object.keys(item.params).length ? h('button', { type: 'button', text: t('Settings'), onclick: () => configure(chart, item) }) : null,
       h('button', { type: 'button', text: t(item.hidden ? L('Show') : L('Hide')), onclick: () => {
         chart.patchIndicator(item.uid, { hidden: !item.hidden });
@@ -549,20 +1094,30 @@ function checkAlerts(symbol, previous, current, at) {
   return fired;
 }
 
-// Undo history for drawings.
-function before() {
-  past.push(JSON.stringify(state.drawings));
-  if (past.length > 80) past.shift();
-  future.length = 0;
+function workspaceHistory() {
+  const { active, ...data } = workspaceData(state);
+  data.drawings = Object.fromEntries(Object.entries(data.drawings).filter(([, items]) => items.length));
+  data.alerts = data.alerts.map(({ status, at, ...rule }) => rule);
+  return JSON.stringify(data);
 }
-function travel(from, to) {
-  const now = JSON.stringify(state.drawings);
-  let next = from.pop();
-  while (next === now && from.length) next = from.pop();
-  if (next === undefined || next === now) return;
-  to.push(now);
-  state.drawings = JSON.parse(next);
+async function travel(from, to) {
+  const next = from.pop();
+  if (next === undefined) return;
+  to.push(historyHead);
+  const focusedChart = document.activeElement?.matches('svg.chart');
+  const snapshot = JSON.parse(next);
+  const alerts = new Map(state.alerts.map(alert => [alert.id, alert]));
+  snapshot.alerts = snapshot.alerts.map(rule => ({ ...rule, status: alerts.get(rule.id)?.status ?? 'active', at: alerts.get(rule.id)?.at }));
+  state = { ...state, ...snapshot, settings: { ...state.settings, ...snapshot.settings } };
+  applyTheme();
+  buildCharts();
+  applyPanel();
+  historyHead = workspaceHistory();
   afterChange();
+  renderPanel(true);
+  if (focusedChart) active()?.host.querySelector('svg.chart')?.focus();
+  if ((state.locale ?? document.documentElement.dataset.defaultLocale ?? detect().tag) !== locale.tag &&
+      (!owner || await flushAccount())) view.location.reload();
 }
 
 function setTool(next) {
@@ -665,7 +1220,13 @@ function syncReplay() {
 }
 
 // Live data: started only when the visitor has turned it on.
-const liveKeys = () => new Set(charts.filter(chart => find(chart.state.symbol).live).map(chart => chart.state.symbol + '|' + chart.state.interval));
+// Keep reference data current for live price levels even when the watchlist is closed.
+const levelKeys = ({ symbol, interval, indicators }) => indicators.some(({ id, hidden, params }) => !hidden &&
+  (id === 'pvsra-suite' && params.levels || id === 'pvsra-levels'))
+  ? [symbol + '|1440', ...(interval < 60 ? [symbol + '|60'] : [])] : [];
+const liveKeys = () => new Set([
+  ...charts.filter(chart => find(chart.state.symbol).live).flatMap(({ state: chart }) => [chart.symbol + '|' + chart.interval, ...levelKeys(chart)]),
+  ...(state.panel === 'watch' ? state.watchlist.filter(symbol => find(symbol)?.live).map(symbol => symbol + '|1440') : [])]);
 // Refreshes the open panel at most once a second while live prices arrive.
 function later() {
   refresh ??= setTimeout(() => {
@@ -683,9 +1244,11 @@ function syncLive() {
         later();
       },
       onTick: (symbol, minutes, previous, bar) => {
+        const matching = charts.filter(chart => chart.state.symbol === symbol && chart.state.interval === minutes);
+        if (!matching.length && charts.some(chart => chart.state.symbol === symbol && levelKeys(chart.state).includes(symbol + '|' + minutes))) return;
         const fired = checkAlerts(symbol, previous, bar.close, bar.time);
         const filled = fillOrders(symbol, bar);
-        charts.filter(chart => chart.state.symbol === symbol && chart.state.interval === minutes && !chart.replaying).forEach(chart => chart.tick());
+        matching.filter(chart => !chart.replaying).forEach(chart => chart.tick());
         if (fired || filled) afterChange();
         else later();
       }
@@ -712,10 +1275,12 @@ function buildCharts() {
     const cell = h('div', { class: 'cell' });
     root.append(cell);
     return createChart(cell, chartState, {
-      store: state, colors, time, before, configure, t,
+      store: state, colors, time, configure, t,
       tool: () => tool,
       toolDone: () => tool !== 'cursor' && setTool('cursor'),
-      status: chart => !find(chart.symbol).live ? null : !state.settings.live ? t('Live data is turned off. Turn it on in Settings.')
+      levels: accountLevels,
+      interest: (symbol, minutes) => state.settings.live ? live?.interest(symbol, minutes) ?? null : null,
+      status: chart => !find(chart.symbol).live ? (engineError ? t('The simulated data engine could not load. Live charts still work.') : null) : !state.settings.live ? t('Live data is turned off. Turn it on in Settings.')
         : live?.status(chart.symbol, chart.interval) === 'error' ? t('Live data is unavailable right now.') : t('Loading live data…'),
       askText: done => {
         const input = h('input', { type: 'text', id: 'note-text', maxlength: 60 });
@@ -739,6 +1304,7 @@ function buildCharts() {
         if (state.panel === 'data' && chart === active()) renderWindow();
       },
       changed: kind => {
+        if (syncing) return;
         if (kind === 'state') propagate(charts.find(chart => chart.state === chartState));
         afterChange(kind);
       }
@@ -759,6 +1325,93 @@ function propagate(source) {
   syncing = false;
 }
 
+function renderTimeframes() {
+  const bar = $('timeframes');
+  const current = active().state.interval;
+  const signature = current + '|' + state.favoriteIntervals.join(',');
+  if (bar.dataset.signature === signature) return;
+  const focused = bar.contains(document.activeElement) ? document.activeElement.id : '';
+  bar.dataset.signature = signature;
+  bar.replaceChildren(
+    ...state.favoriteIntervals.map(minutes => {
+      const control = button('favorite-' + minutes, {
+        label: intervalLabel(minutes), text: intervalLabel(minutes), run: () => active().set({ interval: minutes })
+      });
+      press(control, minutes === current);
+      return control;
+    }),
+    button('manage-timeframes', { label: t('Manage favorite intervals'), text: t('Intervals'), run: timeframeDialog })
+  );
+  if (focused) $(focused)?.focus();
+}
+
+function timeframeDialog() {
+  const custom = h('input', { id: 'custom-timeframe', placeholder: '15s, 7m, 5h, 2D',
+    'aria-label': t('Custom interval') });
+  const error = h('p', { role: 'alert', class: 'error' });
+  const options = h('div', { class: 'timeframe-options' });
+  const listed = () => [...new Set([...intervals, ...state.favoriteIntervals])].sort((a, b) => a - b);
+  const allSelected = () => intervals.every(minutes => state.favoriteIntervals.includes(minutes));
+  const selectAll = h('button', { type: 'button', id: 'select-all-timeframes', text: t('Select all'), disabled: allSelected(), onclick: () => {
+    saveFavorites(listed());
+    fill();
+  } });
+  const saveFavorites = values => {
+    state.favoriteIntervals = [...new Set(values)].sort((a, b) => a - b);
+    selectAll.disabled = allSelected();
+    save();
+    renderTimeframes();
+  };
+  const fill = () => {
+    options.replaceChildren(...listed()
+      .map(minutes => {
+        const checkbox = h('input', { type: 'checkbox', checked: state.favoriteIntervals.includes(minutes) });
+        checkbox.onchange = () => {
+          saveFavorites(checkbox.checked ? [...state.favoriteIntervals, minutes] : state.favoriteIntervals.filter(value => value !== minutes));
+        };
+        const label = intervalLabel(minutes);
+        checkbox.setAttribute('aria-label', t('Favorite intervals') + ' · ' + label);
+        const select = button('select-interval-' + minutes, {
+          label: t('Interval') + ' · ' + (intervalNames[minutes] ? t(intervalNames[minutes]) : label),
+          text: label,
+          run: () => {
+            closeDialog();
+            active().set({ interval: minutes });
+            $('manage-timeframes').focus();
+          }
+        });
+        press(select, active().state.interval === minutes);
+        return h('div', { class: 'timeframe-option' }, select, checkbox);
+      }));
+  };
+  const add = () => {
+    const minutes = parseInterval(custom.value);
+    if (minutes === null) {
+      error.textContent = t('Enter an interval from one second to ten years.');
+      return;
+    }
+    error.textContent = '';
+    saveFavorites([...state.favoriteIntervals, minutes]);
+    fill();
+    custom.value = '';
+    custom.focus();
+  };
+  custom.onkeydown = event => {
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      add();
+    }
+  };
+  dialog(t('Manage favorite intervals'), [
+    hint(t('Months use 30 days and years use 365 days.')),
+    h('div', { class: 'timeframe-input' }, custom,
+      button('add-timeframe', { label: t('Add favorite'), text: t('Add favorite'), run: add })),
+    error, actions(selectAll), options
+  ]);
+  fill();
+  custom.focus();
+}
+
 // Called after anything changes: persists, then refreshes toolbars and the open panel.
 function afterChange(kind) {
   save();
@@ -769,12 +1422,10 @@ function afterChange(kind) {
   if (!chart) return;
   charts.forEach((item, index) => item.host.classList.toggle('active', charts.length > 1 && index === state.active));
   const instrument = find(chart.state.symbol);
-  setLabel('symbol', chart.state.symbol);
-  setLabel('interval', intervalLabel(chart.state.interval));
+  setLabel('symbol', tickerLabel(instrument));
+  renderTimeframes();
   setLabel('style', t(chart.state.style));
   $('status').textContent = instrument.live ? t('Live data') + ' · ' + instrument.source : t('Simulated data');
-  $('undo').disabled = !past.length;
-  $('redo').disabled = !future.length;
   press($('log'), chart.state.log);
   press($('auto'), chart.autoScale);
   const drawing = (state.drawings[chart.state.symbol] ?? []).find(item => item.id === chart.selected);
@@ -791,10 +1442,10 @@ function afterChange(kind) {
 }
 
 function quickActions() {
-  const primary = ['symbol', 'interval', 'style', 'indicators', 'compare', 'alert', 'replay',
+  const primary = ['symbol', 'manage-timeframes', 'style', 'indicators', 'compare', 'alert', 'replay', 'undo', 'redo',
     'layout', 'layouts', 'snapshot', 'fullscreen', 'settings', 'language', 'theme'];
   const controls = [...primary, ...panels.map(([name]) => 'panel-' + name)]
-    .map(id => $(id)).filter(control => control && !control.hidden);
+    .map(id => $(id)).filter(control => control && !control.hidden && !control.disabled);
   const input = h('input', { type: 'search', id: 'action-query', placeholder: t('Find a workspace action'),
     'aria-label': t('Find a workspace action') });
   const results = h('div', { class: 'action-results', id: 'action-results' });
@@ -832,7 +1483,7 @@ function build() {
   const gap = () => h('span', { class: 'gap' });
   const pickSymbol = query => symbolDialog(t('Symbol search'), item => active().set({ symbol: item.symbol }), { query });
   $('top').append(
-    h('a', { class: 'brand', href: './', 'aria-label': t('Meridian home') }, h('span', { class: 'mark', text: '◈', 'aria-hidden': 'true' }),
+    h('a', { class: 'brand', href: './', 'aria-label': t('Meridian home') }, h('span', { class: 'mark', html: brandMark, 'aria-hidden': 'true' }),
       h('span', { class: 'wordmark', text: 'Meridian', 'aria-hidden': 'true' })),
     button('quick-actions', { glyph: 'search', label: t('Quick actions'), text: t('Quick actions'), run: quickActions }),
     button('symbol', { glyph: 'search', label: t('Symbol search'), text: '', always: true, run: () => pickSymbol() }),
@@ -840,8 +1491,6 @@ function build() {
       if (item.symbol !== active().state.symbol) active().toggleCompare(item.symbol);
     }, { simulatedOnly: true }) }),
     gap(),
-    button('interval', { label: t('Interval'), text: '', always: true, run: anchor => menu(anchor, intervals.map(minutes => ({
-      label: t(intervalNames[minutes]), checked: minutes === active().state.interval, run: () => active().set({ interval: minutes }) }))) }),
     button('style', { glyph: 'candle', label: t('Chart type'), text: '', run: anchor => menu(anchor, styles.map(name => ({
       label: t(name), checked: name === active().state.style, run: () => active().set({ style: name }) }))) }),
     button('indicators', { glyph: 'indicators', label: t('Indicators and formulas'), text: t('Indicators'), run: indicatorsDialog }),
@@ -852,8 +1501,8 @@ function build() {
       else active().replayStart();
     } }),
     gap(),
-    button('undo', { glyph: 'undo', label: t('Undo drawing change'), run: () => travel(past, future) }),
-    button('redo', { glyph: 'redo', label: t('Redo drawing change'), run: () => travel(future, past) }),
+    button('undo', { glyph: 'undo', label: t('Undo'), run: () => travel(past, future) }),
+    button('redo', { glyph: 'redo', label: t('Redo'), run: () => travel(future, past) }),
     h('span', { class: 'spacer' }),
     h('span', { class: 'chip status', id: 'status' }),
     button('layout', { glyph: 'layout', label: t('Layout setup'), run: anchor => menu(anchor, [
@@ -891,11 +1540,15 @@ function build() {
       else document.documentElement.requestFullscreen?.();
     } }),
     button('settings', { glyph: 'gear', label: t('Settings'), run: settingsDialog }),
+    account?.enabled === true && (owner
+      ? button('workspace-account', { label: 'Your account', text: 'Account', run: workspaceAccountDialog })
+      : h('a', { href: './account.html', text: 'Sign in' })),
+    owner && h('span', { id: 'workspace-sync-status', class: 'sr-only', role: 'status', text: accountStatus }),
     button('language', { glyph: 'globe', label: t('Language: {0}', locale.name), text: locale.short, always: true, run: anchor => {
-      const entry = item => ({ label: item.name, lang: item.tag, checked: item.tag === locale.tag, run: () => {
+      const entry = item => ({ label: item.name, lang: item.tag, checked: item.tag === locale.tag, run: async () => {
         state.locale = item.tag;
         save();
-        view.location.reload();
+        if (!owner || await flushAccount()) view.location.reload();
       } });
       menu(anchor, [...locales.filter(item => item.reviewed).map(entry), { heading: t('Machine-translated, not yet reviewed') },
         ...locales.filter(item => !item.reviewed).map(entry)]);
@@ -928,7 +1581,6 @@ function build() {
     button('remove', { glyph: 'trash', label: t('Remove objects'), run: anchor => menu(anchor, [
       { label: t('Remove selected drawing'), run: () => active().removeSelected() },
       { label: t('Remove all drawings on {0}', active().state.symbol), run: () => {
-        before();
         state.drawings[active().state.symbol] = [];
         afterChange();
       } },
@@ -959,7 +1611,7 @@ function build() {
       } }))) })
   );
 
-  $('rail').append(...panels.map(([name, glyph, label]) => button('panel-' + name, { glyph, label: t(label), run: () => openPanel(name) })));
+  $('rail').append(...panels.map(([name, glyph, label, short]) => button('panel-' + name, { glyph, label: t(label), text: t(short), always: true, run: () => openPanel(name) })));
   for (const section of $('panel').querySelectorAll('section[data-panel]')) {
     const header = section.querySelector('.panel-head');
     if (!header) continue;
@@ -1013,6 +1665,7 @@ function settingsDialog() {
       if (key === 'live' && control.checked) {
         for (const symbol of ['BTCUSDT', 'ETHUSDT']) if (!state.watchlist.includes(symbol)) state.watchlist.push(symbol);
         toast(t('Live symbols were added to your watchlist.'));
+        refreshSymbols();
       }
       propagate(active());
       afterChange();
@@ -1070,28 +1723,34 @@ function settingsDialog() {
     group(t('Toolbar buttons'), ...optional.map(([id, label]) => shown(id, t(label)))),
     group(t('Side panels'), ...panels.map(([name, , label]) => shown('panel-' + name, t(label)))),
     group(t('Live data'),
-      flag('live', t('Show live crypto prices from Binance'), 'live-toggle'),
-      hint(t('When this is on, your browser connects directly to the public market data service of Binance to load and stream prices for five crypto pairs. Meridian does not relay or store that data, and your use of it is subject to the terms of Binance.') + ' ',
-        h('a', { href: liveTerms, target: '_blank', rel: 'noopener', text: t('Binance terms') }))),
+      flag('live', t('Show live market prices'), 'live-toggle'),
+      hint(t('Your browser connects directly to Binance, Hyperliquid, and dYdX for live market data. Provider terms apply.') + ' ',
+        h('a', { href: liveTerms, target: '_blank', rel: 'noopener', text: t('Binance terms') })),
+      flag('confirmOrders', t('Ask before sending each order to Binance'), 'confirm-orders')),
     group(t('Keyboard'),
-      hint(t('Type a letter to search symbols. On a focused chart: arrow keys inspect bars, + and − zoom, Home and End jump, Delete removes the selected drawing, Escape cancels. Ctrl+Z and Ctrl+Y undo and redo drawings.')),
+      hint(t('Type a letter to search symbols. On a focused chart: arrow keys inspect bars, + and − zoom, Home and End jump, Delete removes the selected drawing, Escape cancels.')),
+      hint('Use Ctrl+Z to undo workspace changes and Ctrl+Y or Ctrl+Shift+Z to redo. On Mac, use Command.'),
       hint(t('Up and Down move the price scale.'))),
     group(t('Preferences'),
-      hint(t('Restores automatic language and theme, the default layout and watchlist, and removes drawings, alerts, saved layouts and the paper account from this browser.')),
-      actions(h('button', { type: 'button', id: 'reset', class: 'danger', text: t('Reset preferences'), onclick: () => {
+      hint(owner
+        ? 'Restores the default account workspace and removes its drawings, alerts and saved layouts. This change syncs to your account.'
+        : t('Restores automatic language and theme, the default layout and watchlist, and removes drawings, alerts, saved layouts and the paper account from this browser.')),
+      actions(h('button', { type: 'button', id: 'reset', class: 'danger', text: t('Reset preferences'), onclick: async () => {
         const translated = state.locale !== null;
         try {
-          localStorage.removeItem(KEY);
-          localStorage.removeItem('meridian.v1');
+          if (!owner) {
+            localStorage.removeItem(KEY);
+            localStorage.removeItem('meridian.v1');
+          }
         } catch {}
         state = defaults();
-        past.length = future.length = 0;
+        lastLocalSave = undefined;
         closeDialog();
         applyTheme();
         buildCharts();
         applyPanel();
         afterChange();
-        if (translated && detect().tag !== locale.tag) view.location.reload();
+        if (translated && detect().tag !== locale.tag && (!owner || await flushAccount())) view.location.reload();
       } })))
   ], true);
 }
@@ -1159,24 +1818,180 @@ function openPanel(name, force) {
 }
 const pairs = rows => rows.flatMap(([label, value, className]) => [h('dt', { text: label }), h('dd', { text: value, class: className })]);
 
+const watchChildren = parent => state.watchFolders.filter(folder => folder.parent === parent);
+const watchLocation = symbol => state.watchLocations[symbol] ?? '';
+const watchSymbols = parent => state.watchlist.filter(symbol => watchLocation(symbol) === parent);
+
+function watchBranches(parent = '', depth = 0, ancestors = []) {
+  return watchChildren(parent).flatMap(folder => {
+    const path = [...ancestors, folder];
+    return [{ folder, depth, path }, ...watchBranches(folder.id, depth + 1, path)];
+  });
+}
+
+function watchDestination(value, branches = watchBranches()) {
+  return h('select', {}, h('option', { value: '', text: t('Watchlist root'), selected: !value }),
+    branches.map(({ folder, path }) => h('option', { value: folder.id, text: path.map(entry => entry.name).join(' / '), selected: folder.id === value })));
+}
+
+function expandWatchPath(parent) {
+  const branch = watchBranches().find(entry => entry.folder.id === parent);
+  for (const folder of branch?.path ?? []) folder.collapsed = false;
+}
+
+function placeWatchSymbol(symbol, parent) {
+  if (parent) state.watchLocations[symbol] = parent;
+  else delete state.watchLocations[symbol];
+}
+
+function orderWatchItem(items, siblings, item, offset) {
+  const neighbor = siblings[siblings.indexOf(item) + offset];
+  if (neighbor === undefined) return;
+  const first = items.indexOf(item);
+  const next = items.indexOf(neighbor);
+  [items[first], items[next]] = [items[next], items[first]];
+}
+
+function watchOrderButtons(items, siblings, item, name, done) {
+  return [-1, 1].map(offset => h('button', {
+    type: 'button', text: offset < 0 ? '↑' : '↓',
+    'aria-label': t(offset < 0 ? L('Move {0} up') : L('Move {0} down'), name),
+    disabled: siblings[siblings.indexOf(item) + offset] === undefined, onclick: () => {
+      orderWatchItem(items, siblings, item, offset);
+      afterChange();
+      done();
+    }
+  }));
+}
+
+function editWatchFolder(folder) {
+  const branches = watchBranches();
+  const branch = branches.find(item => item.folder === folder);
+  const descendants = folder ? branches.filter(item => item.path.includes(folder)) : [];
+  const height = branch ? Math.max(...descendants.map(item => item.depth)) - branch.depth : 0;
+  const parentChoices = branches.filter(item => !item.path.includes(folder) && item.depth + height + 1 < watchLevels.length);
+  const destination = watchDestination(folder?.parent ?? '', parentChoices);
+  const name = h('input', { id: 'watch-folder-name', value: folder?.name ?? '', maxlength: 60, required: true });
+  const error = h('p', { class: 'error', role: 'alert' });
+  const kind = h('p', { class: 'hint' });
+  const showKind = () => {
+    const parent = parentChoices.find(item => item.folder.id === destination.value);
+    kind.textContent = t(watchLevels[(parent?.depth ?? -1) + 1]);
+  };
+  destination.onchange = showKind;
+  showKind();
+  const apply = () => {
+    const title = name.value.trim();
+    if (!title || watchChildren(destination.value).some(item => item !== folder && item.name.toLowerCase() === title.toLowerCase())) {
+      error.textContent = t(title ? L('That name is already used here.') : L('Enter a name.'));
+      name.focus();
+      return;
+    }
+    const updated = { name: title, parent: destination.value };
+    if (folder) Object.assign(folder, updated);
+    else state.watchFolders.push({ ...updated, id: 'watch-' + crypto.randomUUID(), collapsed: false });
+    expandWatchPath(destination.value);
+    afterChange();
+    organizeWatch();
+  };
+  name.onkeydown = event => { if (event.key === 'Enter') { event.preventDefault(); apply(); } };
+  dialog(t(folder ? L('Edit watchlist folder') : L('New watchlist folder')), [
+    field(t('Name'), name), field(t('Parent folder'), destination), kind, error, actions(
+      h('button', { type: 'button', text: t('Back'), onclick: organizeWatch }),
+      h('button', { type: 'button', class: 'primary', text: t(folder ? L('Save') : L('Create')), onclick: apply }))
+  ]);
+  name.focus();
+}
+
+function deleteWatchFolder(folder) {
+  dialog(t('Remove {0}?', folder.name), [hint(t('Symbols and child folders will move to the parent.')), actions(
+    h('button', { type: 'button', text: t('Back'), onclick: organizeWatch }),
+    h('button', { type: 'button', class: 'danger', text: t('Remove'), onclick: () => {
+      for (const symbol of watchSymbols(folder.id)) placeWatchSymbol(symbol, folder.parent);
+      for (const child of watchChildren(folder.id)) child.parent = folder.parent;
+      state.watchFolders = state.watchFolders.filter(item => item !== folder);
+      expandWatchPath(folder.parent);
+      afterChange();
+      organizeWatch();
+    } })
+  )]);
+}
+
+function moveWatchSymbol(symbol) {
+  const destination = watchDestination(watchLocation(symbol));
+  dialog(t('Move {0}', tickerLabel(find(symbol))), [field(t('Destination'), destination), actions(
+    h('button', { type: 'button', text: t('Back'), onclick: organizeWatch }),
+    h('button', { type: 'button', class: 'primary', text: t('Move'), onclick: () => {
+      placeWatchSymbol(symbol, destination.value);
+      expandWatchPath(destination.value);
+      afterChange();
+      organizeWatch();
+    } })
+  )]);
+  destination.focus();
+}
+
+function organizeWatch() {
+  const rows = (parent = '', depth = 0) => {
+    const folders = watchChildren(parent);
+    const symbols = watchSymbols(parent);
+    const indent = 'padding-inline-start:' + depth * 12 + 'px';
+    return [
+      ...folders.flatMap(folder => [h('div', { class: 'watch-organizer-row', style: indent, 'data-watch-folder': folder.id },
+        h('strong', { text: folder.name, title: t(watchLevels[depth]) }),
+        ...watchOrderButtons(state.watchFolders, folders, folder, folder.name, organizeWatch),
+        h('button', { type: 'button', text: t('Edit'), 'aria-label': t('Edit {0}', folder.name), onclick: () => editWatchFolder(folder) }),
+        h('button', { type: 'button', text: '✕', 'aria-label': t('Remove {0}', folder.name), onclick: () => deleteWatchFolder(folder) })),
+      ...rows(folder.id, depth + 1)]),
+      ...symbols.map(symbol => {
+        const label = tickerLabel(find(symbol));
+        return h('div', { class: 'watch-organizer-row', style: indent, 'data-watch-symbol': symbol }, h('span', { text: label }),
+          ...watchOrderButtons(state.watchlist, symbols, symbol, label, organizeWatch),
+          h('button', { type: 'button', text: t('Move'), 'aria-label': t('Move {0}', label), onclick: () => moveWatchSymbol(symbol) }));
+      })
+    ];
+  };
+  dialog(t('Organize watchlist'), [
+    actions(h('button', { type: 'button', id: 'watch-new-folder', text: t('New watchlist folder'), onclick: () => editWatchFolder() })),
+    h('div', { id: 'watch-organizer' }, rows())
+  ]);
+}
+
 function renderWatch() {
   const container = $('symbols');
-  const focused = container.contains(document.activeElement) ? document.activeElement.dataset.symbol : null;
+  const focused = container.contains(document.activeElement) ? document.activeElement.dataset.watchFocus : null;
   const current = active().state.symbol;
-  container.replaceChildren(...state.watchlist.map(symbol => {
+  const symbolRow = (symbol, depth) => {
     const item = find(symbol);
     const data = stats(item);
-    return h('div', { class: 'symbol-row' },
-      h('button', { type: 'button', class: 'symbol', 'data-symbol': symbol, 'aria-pressed': String(symbol === current), onclick: () => active().set({ symbol }) },
-        h('span', {}, h('strong', { text: symbol }), h('small', { text: item.name })),
+    return h('div', { class: 'symbol-row', style: '--watch-depth:' + depth },
+      h('button', { type: 'button', class: 'symbol', 'data-symbol': symbol, 'data-watch-focus': 'symbol-' + symbol, 'aria-pressed': String(symbol === current), onclick: () => active().set({ symbol }) },
+        h('span', {}, h('strong', { text: tickerLabel(item) }), h('small', { text: item.name })),
         h('span', { class: 'num', text: data ? price(data.last, item) : '…' }), h('span', { class: 'num ' + (data ? tone(data.change) : ''), text: data ? signed(data.change) : '' })),
       h('button', { type: 'button', class: 'ghost', 'aria-label': t('Remove {0} from watchlist', symbol), text: '✕', onclick: () => {
         state.watchlist = state.watchlist.filter(entry => entry !== symbol);
+        placeWatchSymbol(symbol, '');
         afterChange();
       } }));
-  }));
-  if (!state.watchlist.length) container.append(hint(t('Your watchlist is empty. Use Add symbol.')));
-  if (focused) container.querySelector('[data-symbol="' + focused + '"]')?.focus();
+  };
+  const rows = (parent = '', depth = 0) => [
+    ...watchChildren(parent).map(folder => {
+      const region = 'watch-folder-' + folder.id;
+      return h('div', { class: 'watch-folder' }, h('button', {
+        type: 'button', class: 'watch-folder-toggle', style: '--watch-depth:' + depth, 'aria-expanded': String(!folder.collapsed),
+        'aria-controls': region, 'data-watch-focus': 'folder-' + folder.id, onclick: () => {
+          folder.collapsed = !folder.collapsed;
+          save();
+          renderWatch();
+        }
+      }, h('span', { 'aria-hidden': 'true', text: folder.collapsed ? '▸' : '▾' }), h('span', { text: folder.name })),
+      h('div', { id: region, hidden: folder.collapsed }, folder.collapsed ? [] : rows(folder.id, depth + 1)));
+    }),
+    ...watchSymbols(parent).map(symbol => symbolRow(symbol, depth))
+  ];
+  container.replaceChildren(...rows());
+  if (!state.watchlist.length && !state.watchFolders.length) container.append(hint(t('Your watchlist is empty. Use Add symbol.')));
+  if (focused) [...container.querySelectorAll('[data-watch-focus]')].find(item => item.dataset.watchFocus === focused)?.focus();
 
   const item = find(current);
   const data = stats(item);
@@ -1220,7 +2035,7 @@ function renderWindow() {
   const rows = [[t('Time'), time(bar.time, 'full')], [t('Open'), price(bar.open, item)], [t('High'), price(bar.high, item)], [t('Low'), price(bar.low, item)],
     [t('Close'), price(bar.close, item)], [t('Change'), signed(change)], [t('Volume'), bar.volume.toLocaleString('en-US', { maximumFractionDigits: 2 })]];
   for (const indicator of chart.state.indicators.filter(entry => entry.id !== 'volume' && !entry.hidden)) {
-    for (const plot of chart.plots(indicator)) {
+    for (const plot of chart.plots(indicator).filter(entry => !shapes.has(entry.kind))) {
       const value = plot.values[index];
       rows.push([plot.label, value === null || value === undefined || Number.isNaN(value) ? '–' : value.toLocaleString('en-US', { maximumFractionDigits: 4 })]);
     }
@@ -1239,11 +2054,10 @@ function renderData() {
   const drawings = state.drawings[chart.state.symbol] ?? [];
   $('objects').replaceChildren(
     ...chart.state.indicators.map(indicator => entry(indicatorName(indicator),
-      t('Indicator') + ' · ' + t(paneOf(indicator) === 'overlay' ? 'On the price pane' : 'In its own pane'), () => chart.removeIndicator(indicator.uid))),
+      t('Indicator') + ' · ' + t(paneLabel(paneOf(indicator))), () => chart.removeIndicator(indicator.uid))),
     ...chart.state.compare.map(symbol => entry(symbol, t('Comparison'), () => chart.toggleCompare(symbol))),
     ...drawings.map(drawing => entry(t(drawingNames[drawing.type]) + (drawing.text ? ' “' + drawing.text + '”' : ''),
       t('Drawing') + ' · ' + price(drawing.points[0].p, item) + (drawing.id === chart.selected ? ' · ' + t('selected') : ''), () => {
-        before();
         state.drawings[chart.state.symbol] = drawings.filter(other => other !== drawing);
         afterChange();
       }, () => {
@@ -1318,7 +2132,191 @@ function runBacktest() {
     report.open ? hint(t('A position opened on {0} is still open and is valued at the last close.', time(report.open.entryTime, 'full'))) : null);
 }
 
+// ── Binance account ──────────────────────────────────────────────────────────────────────────
+const broker = createBroker({ onChange: () => {
+  charts.forEach(chart => chart.render());
+  if (state.panel === 'trade') renderTrade();
+} });
+const pairPrice = (pair, value) => Number.isFinite(value) && value > 0 ? price(value, find(pair + '.P') ?? { digits: value < 1 ? 5 : 2 }) : '–';
+const usd = value => (Number.isFinite(value) ? value : 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' USDT';
+const positionName = position => t(position.amount > 0 ? 'Long' : 'Short') + ' ' + Math.abs(position.amount) + ' ' + position.symbol;
+const orderName = order => t(order.side === 'BUY' ? 'Buy' : 'Sell') + ' ' + (order.closePosition ? t('whole position') : order.quantity) + ' ' + order.symbol;
+// Profit and loss at the latest streamed price, falling back to the mark price Binance reported.
+function openProfit(position) {
+  const last = state.settings.live ? live?.last(position.symbol + '.P')?.close : null;
+  return last > 0 ? position.amount * (last - position.entry) : position.unrealized;
+}
+// Lines the chart draws for the connected account on a futures symbol.
+function accountLevels(symbol) {
+  const pair = futuresPair(symbol);
+  if (!pair || broker.state.status !== 'connected') return [];
+  const levels = [];
+  for (const order of broker.state.orders.filter(item => item.symbol === pair)) {
+    const level = order.trigger ?? order.price ?? order.activation;
+    if (!(level > 0)) continue;
+    levels.push({ price: level, tone: order.kind === 'limit' ? (order.side === 'BUY' ? 'up' : 'down') : order.kind.startsWith('takeProfit') ? 'up' : order.kind === 'trailing' ? 'alert' : 'down',
+      dash: '8 3 2 3', label: t(order.side === 'BUY' ? 'Buy' : 'Sell') + ' · ' + t(orderKinds[order.kind]) + (order.callback ? ' ' + order.callback + '%' : '') });
+  }
+  for (const position of broker.state.positions.filter(item => item.symbol === pair)) {
+    levels.push({ price: position.entry, tone: 'muted', dash: '2 3', label: positionName(position) + ' · ' + t('Entry') });
+    if (position.breakEven > 0 && position.breakEven !== position.entry) levels.push({ price: position.breakEven, tone: 'accent', dash: '5 3', label: t('Break-even') });
+    if (position.liquidation > 0) levels.push({ price: position.liquidation, tone: 'down', dash: '10 4', label: t('Liquidation') });
+  }
+  return levels;
+}
+// Sends one account action. Real orders are shown for approval first unless that is turned off in Settings.
+function brokerAction(summary, action, body, done) {
+  const run = async () => {
+    try {
+      await broker.act(action, body);
+      toast(done ?? t('Sent to Binance: {0}', summary));
+    } catch (problem) {
+      toast(t('Binance: {0}', problem.message));
+    }
+  };
+  if (!state.settings.confirmOrders) return run();
+  dialog(t('Send to Binance?'), [
+    h('p', { class: 'summary', id: 'bn-confirm-text', text: summary }),
+    hint(t(broker.state.mode === 'testnet' ? L('This goes to the Binance futures testnet. No real funds are used.') : L('This goes to your real Binance futures account and uses real funds.'))),
+    actions(h('button', { type: 'button', text: t('Cancel'), onclick: closeDialog }),
+      h('button', { type: 'button', class: 'primary', id: 'bn-confirm', text: t('Send to Binance'), onclick: () => {
+        closeDialog();
+        run();
+      } }))]);
+}
+function submitBinance(side) {
+  const pair = futuresPair(active().state.symbol);
+  if (!pair) return toast(t('Open a Binance perpetual futures chart (a symbol ending in .P) to trade it.'));
+  const value = id => $(id).value.trim();
+  const kind = $('bn-type').value;
+  const entry = kind === 'market' || kind === 'limit';
+  if (!(Number(value('bn-qty')) > 0)) return toast(t('Enter a quantity above zero.'));
+  const body = { symbol: pair, side: side > 0 ? 'BUY' : 'SELL', kind, quantity: value('bn-qty'), reduceOnly: entry ? $('bn-reduce').checked : true };
+  const parts = [t(side > 0 ? 'Buy' : 'Sell') + ' ' + value('bn-qty') + ' ' + pair, t(orderKinds[kind])];
+  if (kind === 'limit') {
+    if (!(Number(value('bn-price')) > 0)) return toast(t('Enter an order price above zero.'));
+    body.price = value('bn-price');
+    parts.push(t('Limit at {0}', value('bn-price')));
+  } else if (kind === 'stop' || kind === 'takeProfit') {
+    if (!(Number(value('bn-trigger')) > 0)) return toast(t('Enter a trigger price above zero.'));
+    body.triggerPrice = value('bn-trigger');
+    parts.push(t('Trigger price') + ' ' + value('bn-trigger'));
+  } else if (kind === 'trailing') {
+    body.callbackRate = value('bn-callback');
+    if (Number(value('bn-activation')) > 0) body.activatePrice = value('bn-activation');
+    parts.push(t('Callback rate %') + ' ' + value('bn-callback') + (body.activatePrice ? ' · ' + t('Activation price') + ' ' + body.activatePrice : ''));
+  }
+  if (entry) {
+    for (const [id, name, label] of [['bn-tp', 'takeProfit', L('Take profit')], ['bn-sl', 'stopLoss', L('Stop loss')]]) {
+      if (Number(value(id)) > 0) {
+        body[name] = value(id);
+        parts.push(t(label) + ' ' + value(id));
+      }
+    }
+  }
+  if (body.reduceOnly) parts.push(t('Reduce only'));
+  brokerAction(parts.join(' · '), 'order', body);
+}
+// Take profit, stop loss and trailing stop for an open position; each closes the whole position.
+function exitsDialog(position) {
+  const closing = position.amount > 0 ? 'SELL' : 'BUY';
+  const input = (id, more = {}) => h('input', { type: 'number', min: 0, step: 'any', id, placeholder: t('Optional'), ...more });
+  const [takeProfit, stopLoss, callback] = [input('bn-exit-tp'), input('bn-exit-sl'), input('bn-exit-callback', { min: 0.1, max: 20, step: 0.1 })];
+  dialog(t('Exits for {0}', positionName(position)), [
+    hint(t('Entry') + ' ' + pairPrice(position.symbol, position.entry) + ' · ' + t('Break-even') + ' ' + pairPrice(position.symbol, position.breakEven) + ' · ' +
+      t('Liquidation') + ' ' + pairPrice(position.symbol, position.liquidation)),
+    field(t('Take profit'), takeProfit), field(t('Stop loss'), stopLoss), field(t('Trailing stop') + ' · ' + t('Callback rate %'), callback),
+    actions(h('button', { type: 'button', class: 'primary', id: 'bn-exit-save', text: t('Place exits'), onclick: async () => {
+      const base = { symbol: position.symbol, side: closing, positionSide: position.side === 'BOTH' ? undefined : position.side };
+      const jobs = [];
+      if (Number(takeProfit.value) > 0) jobs.push([t('Take profit') + ' ' + takeProfit.value, { ...base, kind: 'takeProfit', triggerPrice: takeProfit.value, closePosition: true }]);
+      if (Number(stopLoss.value) > 0) jobs.push([t('Stop loss') + ' ' + stopLoss.value, { ...base, kind: 'stop', triggerPrice: stopLoss.value, closePosition: true }]);
+      if (Number(callback.value) > 0) jobs.push([t('Trailing stop') + ' ' + callback.value + '%', { ...base, kind: 'trailing', callbackRate: callback.value, quantity: Math.abs(position.amount), reduceOnly: true }]);
+      closeDialog();
+      for (const [label, body] of jobs) {
+        try {
+          await broker.act('order', body);
+          toast(t('Sent to Binance: {0}', label));
+        } catch (problem) {
+          toast(t('Binance: {0}', label + ' — ' + problem.message));
+        }
+      }
+    } }))]);
+}
+function renderBinance() {
+  const status = broker.state.status;
+  const connected = status === 'connected';
+  $('bn-connect').hidden = connected || ['no_server', 'unknown', 'sign_in_required'].includes(status);
+  $('bn-testnet').closest('label').hidden = broker.state.hosted;
+  $('bn-live').hidden = !connected;
+  const notes = {
+    unknown: L('Checking the Binance connection…'),
+    no_server: L('Connecting a Binance account needs Meridian running on your own computer (npm start). This hosted copy shows live prices only.'),
+    not_configured: L('Connect your Binance account to see your futures positions on the chart and manage orders from here.'),
+    authorization_required: L('Binance refused the API key. Check the key, its Futures permission and its IP restriction.'),
+    unavailable: L('Binance could not be reached. Try again in a moment.')
+  };
+  $('bn-note').replaceChildren(...[status === 'sign_in_required' ? h('a', { href: './account.html', text: 'Sign in to connect Binance Futures Demo' })
+    : connected ? t('Connected to Binance USDⓈ-M futures.')
+      : broker.state.hosted && status === 'not_configured' ? 'Connect with your Binance Futures Demo API key and secret.'
+        : t(notes[status]) + (broker.state.message && status !== 'not_configured' && status !== 'no_server' ? ' ' + broker.state.message : ''),
+    connected && h('span', { class: 'badge' + (broker.state.mode === 'live' ? ' live' : ''), text: t(broker.state.mode === 'live' ? L('Real account') : L('Testnet')) }),
+    connected && broker.state.hedge && h('span', { class: 'badge', text: t('Hedge mode') })].filter(Boolean));
+  if (!connected) return;
+  const { account, positions, orders } = broker.state;
+  const profit = positions.reduce((sum, position) => sum + openProfit(position), 0);
+  $('bn-account').replaceChildren(...pairs([[t('Wallet balance'), usd(account?.wallet)], [t('Available'), usd(account?.available)],
+    [t('Open profit and loss'), usd(profit), tone(profit)], [t('Margin balance'), usd((account?.wallet ?? 0) + profit)]]));
+  const pair = futuresPair(active().state.symbol);
+  const kind = $('bn-type').value;
+  const entry = kind === 'market' || kind === 'limit';
+  for (const [id, shown] of [['bn-price-field', kind === 'limit'], ['bn-trigger-field', kind === 'stop' || kind === 'takeProfit'], ['bn-callback-field', kind === 'trailing'],
+    ['bn-activation-field', kind === 'trailing'], ['bn-tp-field', entry], ['bn-sl-field', entry], ['bn-reduce-field', entry]]) $(id).hidden = !shown;
+  $('bn-buy').textContent = pair ? t('Buy {0}', pair) : t('Buy');
+  $('bn-sell').textContent = pair ? t('Sell {0}', pair) : t('Sell');
+  $('bn-buy').disabled = $('bn-sell').disabled = !pair;
+  const held = positions.find(position => position.symbol === pair);
+  if (document.activeElement !== $('bn-leverage') && held?.leverage) $('bn-leverage').value = held.leverage;
+  if (document.activeElement !== $('bn-margin') && held?.marginType) $('bn-margin').value = held.marginType === 'ISOLATED' ? 'ISOLATED' : 'CROSSED';
+  $('bn-positions').replaceChildren(...positions.map(position => {
+    const gain = openProfit(position);
+    const target = { symbol: position.symbol, positionSide: position.side === 'BOTH' ? undefined : position.side };
+    const name = positionName(position);
+    return h('div', { class: 'card position', 'data-symbol': position.symbol },
+      h('strong', {}, name, position.leverage ? ' · ' + position.leverage + 'x' : '', h('span', { class: tone(gain), text: ' ' + usd(gain) })),
+      h('dl', {}, [[t('Entry'), position.entry], [t('Break-even'), position.breakEven], [t('Mark price'), position.mark], [t('Liquidation'), position.liquidation]]
+        .map(([label, value]) => h('div', {}, h('dt', { text: label }), h('dd', { text: pairPrice(position.symbol, value) })))),
+      h('span', { class: 'card-actions' },
+        h('button', { type: 'button', text: t('Close'), 'aria-label': t('Close {0} position', position.symbol), onclick: () => brokerAction(t('Close {0} at market', name), 'close', target) }),
+        h('button', { type: 'button', text: t('Close half'), onclick: () => brokerAction(t('Close half of {0} at market', name), 'close', { ...target, fraction: 0.5 }) }),
+        h('button', { type: 'button', text: t('Reverse'), onclick: () => brokerAction(t('Reverse {0} at market', name), 'reverse', target) }),
+        h('button', { type: 'button', text: t('Stop to break-even'), onclick: () => brokerAction(t('Move the stop loss of {0} to break-even at {1}', name, pairPrice(position.symbol, position.breakEven || position.entry)), 'break-even', target) }),
+        h('button', { type: 'button', text: t('Exits'), 'aria-label': t('Exits for {0}', name), onclick: () => exitsDialog(position) }),
+        find(position.symbol + '.P') && h('button', { type: 'button', text: t('Chart'), onclick: () => active().set({ symbol: position.symbol + '.P' }) })));
+  }));
+  if (!positions.length) $('bn-positions').append(hint(t('No open positions.')));
+  $('bn-orders').replaceChildren(...orders.map(order => h('div', { class: 'card' },
+    h('strong', { text: orderName(order) }),
+    h('small', { text: [t(orderKinds[order.kind]), order.price ? t('Limit at {0}', pairPrice(order.symbol, order.price)) : null,
+      order.trigger ? t('Trigger price') + ' ' + pairPrice(order.symbol, order.trigger) : null, order.callback ? t('Callback rate %') + ' ' + order.callback : null,
+      order.activation ? t('Activation price') + ' ' + pairPrice(order.symbol, order.activation) : null, order.reduceOnly ? t('Reduce only') : null].filter(Boolean).join(' · ') }),
+    h('span', { class: 'card-actions' }, h('button', { type: 'button', text: t('Cancel'), 'aria-label': t('Cancel order on {0}', order.symbol),
+      onclick: () => brokerAction(t('Cancel order on {0}', order.symbol) + ': ' + orderName(order), 'cancel', { symbol: order.symbol, id: order.id, algo: order.algo }, t('Order cancelled.')) })))));
+  if (!orders.length) $('bn-orders').append(hint(t('No working orders.')));
+  else if (pair && orders.some(order => order.symbol === pair)) {
+    $('bn-orders').append(h('p', {}, h('button', { type: 'button', id: 'bn-cancel-all', text: t('Cancel all orders on {0}', pair),
+      onclick: () => brokerAction(t('Cancel all orders on {0}', pair), 'cancel-all', { symbol: pair }, t('Order cancelled.')) })));
+  }
+}
+
 function renderTrade() {
+  const binance = state.tradeAccount === 'binance';
+  press($('trade-paper'), !binance);
+  press($('trade-binance'), binance);
+  $('paper-pane').hidden = binance;
+  $('binance-pane').hidden = !binance;
+  $('trade-reset').hidden = binance;
+  if (binance) return renderBinance();
   const open = Object.entries(state.paper.positions);
   const value = symbol => quote(symbol) ?? state.paper.positions[symbol].avg;
   const worth = open.reduce((sum, [symbol, position]) => sum + position.qty * value(symbol), 0);
@@ -1395,7 +2393,6 @@ function importWorkspace(parsed) {
   const keep = state.locale;
   state = normalize(parsed);
   state.locale = keep;
-  past.length = future.length = 0;
   applyTheme();
   buildCharts();
   applyPanel();
@@ -1407,11 +2404,19 @@ function importWorkspace(parsed) {
 // Static controls.
 function wire(pickSymbol) {
   $('dialog-close').onclick = closeDialog;
-  $('watch-add').onclick = () => symbolDialog(t('Add to watchlist'), item => {
-    if (!state.watchlist.includes(item.symbol)) state.watchlist.push(item.symbol);
-    toast(t('{0} is on your watchlist', item.symbol));
-    afterChange();
-  }, { stay: true });
+  $('watch-organize').onclick = organizeWatch;
+  $('watch-add').onclick = () => {
+    const destination = state.watchFolders.length ? watchDestination('') : null;
+    symbolDialog(t('Add to watchlist'), item => {
+      if (!state.watchlist.includes(item.symbol)) state.watchlist.push(item.symbol);
+      if (destination?.value) {
+        placeWatchSymbol(item.symbol, destination.value);
+        expandWatchPath(destination.value);
+      }
+      toast(t('{0} is on your watchlist', item.symbol));
+      afterChange();
+    }, { stay: true, destination });
+  };
   $('alert-new').onclick = alertDialog;
   $('export').onclick = () => download(new Blob([csv(active().visible())], { type: 'text/csv;charset=utf-8' }),
     'meridian-' + active().state.symbol + '-' + intervalLabel(active().state.interval) + '.csv');
@@ -1444,6 +2449,48 @@ function wire(pickSymbol) {
   $('trade-reset').onclick = () => {
     state.paper = defaults().paper;
     afterChange();
+  };
+  for (const [id, account] of [['trade-paper', 'paper'], ['trade-binance', 'binance']]) {
+    $(id).onclick = () => {
+      state.tradeAccount = account;
+      if (account === 'binance' && broker.state.status !== 'connected') broker.check();
+      afterChange();
+    };
+  }
+  $('bn-connect').onsubmit = async event => {
+    event.preventDefault();
+    $('bn-submit').disabled = true;
+    try {
+      await broker.connect($('bn-key').value, $('bn-secret').value, broker.state.hosted || $('bn-testnet').checked);
+      toast(t('Connected to Binance USDⓈ-M futures.'));
+    } catch (problem) {
+      toast(t('Binance: {0}', problem.message));
+    }
+    // The page keeps no copy of the credentials once the local server has them.
+    $('bn-key').value = $('bn-secret').value = '';
+    $('bn-submit').disabled = false;
+    renderTrade();
+  };
+  $('bn-disconnect').onclick = async () => {
+    try { await broker.disconnect(); } catch (problem) { toast(t('Binance: {0}', problem.message)); }
+  };
+  $('bn-type').onchange = renderTrade;
+  $('bn-buy').onclick = () => submitBinance(1);
+  $('bn-sell').onclick = () => submitBinance(-1);
+  $('bn-leverage').onchange = () => {
+    const pair = futuresPair(active().state.symbol);
+    if (pair && Number($('bn-leverage').value) >= 1) brokerAction(t('Set {0} leverage to {1}x', pair, $('bn-leverage').value), 'leverage', { symbol: pair, leverage: $('bn-leverage').value }, t('Leverage updated.'));
+  };
+  $('bn-margin').onchange = () => {
+    const pair = futuresPair(active().state.symbol);
+    if (pair) brokerAction(t('Set {0} margin to {1}', pair, t($('bn-margin').value === 'ISOLATED' ? 'Isolated' : 'Cross')), 'margin-type', { symbol: pair, marginType: $('bn-margin').value }, t('Margin mode updated.'));
+  };
+  $('engine-retry').onclick = async () => {
+    await loadEngine();
+    statsCache.clear();
+    $('engine-error').hidden = !engineError;
+    afterChange();
+    renderPanel(true);
   };
   $('share-copy').onclick = async () => {
     const link = shareLink();
@@ -1481,7 +2528,6 @@ function wire(pickSymbol) {
     const chart = active();
     const drawing = (state.drawings[chart.state.symbol] ?? []).find(item => item.id === chart.selected);
     if (!drawing) return;
-    before();
     Object.assign(drawing, patch);
     afterChange();
   };
@@ -1491,14 +2537,17 @@ function wire(pickSymbol) {
   $('draw-delete').onclick = () => active().removeSelected();
   // The side panel is resized by dragging its inner edge, or with the arrow keys when the edge has focus.
   const grip = $('panel-grip');
+  // Docked under the chart, the same stored size is the panel's height and the edge moves up and down.
+  const below = () => state.settings.panelSide === 'bottom';
   const inward = () => state.settings.panelSide === 'left' ? 1 : -1;
+  const extent = () => $('panel').getBoundingClientRect()[below() ? 'height' : 'width'];
   const resize = width => { state.panelWidth = Math.round(Math.min(720, Math.max(240, width))); };
   grip.onpointerdown = event => {
-    const start = $('panel').getBoundingClientRect().width;
-    const from = event.clientX;
+    const start = extent();
+    const from = below() ? event.clientY : event.clientX;
     try { grip.setPointerCapture?.(event.pointerId); } catch {}
     grip.onpointermove = move => {
-      resize(start + inward() * (move.clientX - from));
+      resize(start + inward() * ((below() ? move.clientY : move.clientX) - from));
       applyLook();
     };
     grip.onpointerup = () => {
@@ -1507,9 +2556,10 @@ function wire(pickSymbol) {
     };
   };
   grip.onkeydown = event => {
-    if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
+    const [less, more] = below() ? ['ArrowUp', 'ArrowDown'] : ['ArrowLeft', 'ArrowRight'];
+    if (event.key !== less && event.key !== more) return;
     event.preventDefault();
-    resize((state.panelWidth ?? ($('panel').getBoundingClientRect().width || 320)) + inward() * (event.key === 'ArrowRight' ? 24 : -24));
+    resize((state.panelWidth ?? (extent() || 320)) + inward() * (event.key === more ? 24 : -24));
     afterChange();
   };
   $('replay-pick').onclick = () => {
@@ -1536,7 +2586,7 @@ function wire(pickSymbol) {
     active().replayStop();
   };
   document.addEventListener('keydown', event => {
-    const typing = event.target.closest?.('input, textarea, select, dialog, .menu');
+    const typing = event.target.closest?.('input, textarea, select, dialog, .menu, [contenteditable]');
     if ((event.ctrlKey || event.metaKey) && !typing) {
       const key = event.key.toLowerCase();
       if (key === 'k') quickActions();
@@ -1563,11 +2613,28 @@ wire(pickSymbol);
 setTool('cursor');
 afterChange();
 renderPanel(true);
+view.setInterval(() => charts.forEach(chart => chart.updateCountdown()), 1000);
+$('engine-error').hidden = !engineError;
+if (state.settings.live) refreshSymbols();
+broker.check();
 if (shared) {
   view.history?.replaceState(null, '', view.location.pathname + view.location.search);
   toast(t('Shared layout opened. Your previous layout was saved as "{0}".', t('Before shared link')));
 }
+if (owner) {
+  view.addEventListener('online', () => void flushAccount());
+  view.addEventListener('pagehide', () => void flushAccount(true));
+  view.addEventListener('pageshow', event => { if (event.persisted) view.location.reload(); });
+  view.addEventListener('focus', async () => {
+    const remote = await fetch(accountPath, { cache: 'no-store', signal: AbortSignal.timeout(4000) })
+      .then(response => response.ok ? response.json() : null).catch(() => null);
+    if (!remote || !Object.hasOwn(remote, 'owner')) return;
+    if (remote.owner !== owner) return view.location.reload();
+    if (remote.revision > revision && pendingWorkspace === savedWorkspace && !inFlight && !conflict &&
+        !$('dialog').hasAttribute('open')) useAccountWorkspace(remote);
+  });
+}
 
 // Handle for the automated checks.
-export const workspace = { get state() { return state; }, get charts() { return charts; }, get live() { return live; },
+export const workspace = { get state() { return state; }, get charts() { return charts; }, get live() { return live; }, broker,
   active, setTool, checkAlerts, order, fillOrders, shareLink, importWorkspace };

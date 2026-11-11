@@ -1,3 +1,5 @@
+import { pvsraIndicators } from './pvsra.mjs';
+
 // Technical indicators. Every function returns an array aligned with its input, with null during warmup.
 const closes = bars => bars.map(bar => bar.close);
 
@@ -276,7 +278,7 @@ export function cmf(bars, length) {
 // Each plot: { label, values, kind: 'line' | 'histogram' | 'volume' | 'dots', color } where color indexes the chart palette.
 const line = (label, values, color) => ({ label, values, color });
 export const registry = [
-  { id: 'volume', name: 'Volume', pane: 'overlay', params: { height: 18 },
+  { id: 'volume', name: 'Volume', pane: 'separate', params: { overlay: 0, height: 18 },
     plots: bars => [{ label: 'Vol', kind: 'volume', values: bars.map(bar => bar.volume) }] },
   { id: 'sma', name: 'Moving Average (SMA)', pane: 'overlay', params: { length: 20 },
     plots: (bars, p) => [line('SMA ' + p.length, sma(closes(bars), p.length), 0)] },
@@ -342,6 +344,7 @@ export const registry = [
   { id: 'cmf', name: 'Chaikin Money Flow (CMF)', pane: 'separate', params: { length: 20 }, guides: [0],
     plots: (bars, p) => [line('CMF ' + p.length, cmf(bars, p.length), 3)] },
   { id: 'stdev', name: 'Standard Deviation', pane: 'separate', params: { length: 20 },
-    plots: (bars, p) => [line('StdDev ' + p.length, stdev(closes(bars), p.length), 1)] }
+    plots: (bars, p) => [line('StdDev ' + p.length, stdev(closes(bars), p.length), 1)] },
+  ...pvsraIndicators
 ];
 export const definition = id => registry.find(item => item.id === id);
