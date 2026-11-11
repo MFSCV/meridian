@@ -67,6 +67,7 @@ export default {
   "Binance terms": "Binance నిబంధనలు",
   "Binance: {0}": "Binance: {0}",
   "Bollinger Bands": "Bollinger Bands",
+  "Bottom": "కింద",
   "Bought {0} {1} at {2} (simulated)": "{0} {1} ను {2} వద్ద కొన్నారు (సిమ్యులేటెడ్)",
   "Break-even": "బ్రేక్-ఈవెన్",
   "Brush": "బ్రష్",

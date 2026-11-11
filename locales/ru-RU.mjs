@@ -67,6 +67,7 @@ export default {
   "Binance terms": "Условия Binance",
   "Binance: {0}": "Binance: {0}",
   "Bollinger Bands": "Полосы Боллинджера",
+  "Bottom": "Снизу",
   "Bought {0} {1} at {2} (simulated)": "Куплено {0} {1} по {2} (симуляция)",
   "Break-even": "Безубыток",
   "Brush": "Кисть",

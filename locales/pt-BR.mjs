@@ -67,6 +67,7 @@ export default {
   "Binance terms": "Termos da Binance",
   "Binance: {0}": "Binance: {0}",
   "Bollinger Bands": "Bandas de Bollinger",
+  "Bottom": "Embaixo",
   "Bought {0} {1} at {2} (simulated)": "Comprou {0} {1} a {2} (simulado)",
   "Break-even": "Break-even",
   "Brush": "Pincel",

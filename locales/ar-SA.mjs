@@ -67,6 +67,7 @@ export default {
   "Binance terms": "شروط Binance",
   "Binance: {0}": "Binance: {0}",
   "Bollinger Bands": "نطاقات Bollinger",
+  "Bottom": "الأسفل",
   "Bought {0} {1} at {2} (simulated)": "تم شراء {0} {1} عند {2} (محاكاة)",
   "Break-even": "سعر التعادل",
   "Brush": "فرشاة",

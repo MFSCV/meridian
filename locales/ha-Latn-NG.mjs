@@ -67,6 +67,7 @@ export default {
   "Binance terms": "Sharuɗɗan Binance",
   "Binance: {0}": "Binance: {0}",
   "Bollinger Bands": "Bollinger Bands",
+  "Bottom": "Ƙasa",
   "Bought {0} {1} at {2} (simulated)": "An saya {0} {1} a {2} (kwaikwayo)",
   "Break-even": "Break-even",
   "Brush": "Burush",

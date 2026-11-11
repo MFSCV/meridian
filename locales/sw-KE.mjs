@@ -67,6 +67,7 @@ export default {
   "Binance terms": "Masharti ya Binance",
   "Binance: {0}": "Binance: {0}",
   "Bollinger Bands": "Bollinger Bands",
+  "Bottom": "Chini",
   "Bought {0} {1} at {2} (simulated)": "Umenunua {0} {1} kwa {2} (kuigiza)",
   "Break-even": "Break-even",
   "Brush": "Brashi",

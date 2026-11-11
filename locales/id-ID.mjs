@@ -67,6 +67,7 @@ export default {
   "Binance terms": "Ketentuan Binance",
   "Binance: {0}": "Binance: {0}",
   "Bollinger Bands": "Bollinger Bands",
+  "Bottom": "Bawah",
   "Bought {0} {1} at {2} (simulated)": "Membeli {0} {1} pada {2} (simulasi)",
   "Break-even": "Break-even",
   "Brush": "Kuas",

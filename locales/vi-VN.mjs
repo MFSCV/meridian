@@ -67,6 +67,7 @@ export default {
   "Binance terms": "Điều khoản Binance",
   "Binance: {0}": "Binance: {0}",
   "Bollinger Bands": "Dải Bollinger",
+  "Bottom": "Dưới",
   "Bought {0} {1} at {2} (simulated)": "Đã mua {0} {1} tại {2} (mô phỏng)",
   "Break-even": "Hòa vốn",
   "Brush": "Cọ vẽ",

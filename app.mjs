@@ -81,8 +81,11 @@ const icons = {
   priceIn: 'M12 3v18M8 7l4-4 4 4M8 17l4 4 4-4', priceOut: 'M12 3v6M12 15v6M8 5l4 4 4-4M8 19l4-4 4 4',
   left: 'M15 5l-7 7 7 7', right: 'M9 5l7 7-7 7', latest: 'M6 5l7 7-7 7M18 5v14'
 };
-const icon = name => '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.7" ' +
-  'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="' + icons[name] + '"/></svg>';
+const icon = name => '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.5" ' +
+  'stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true"><path d="' + icons[name] + '"/></svg>';
+// The brand mark: a globe crossed by its meridian.
+const brandMark = '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">' +
+  '<circle cx="12" cy="12" r="8.2"/><path d="M12 1v22" stroke-width="2.2"/><path d="M4.6 8.5h14.8M4.6 15.5h14.8" stroke-width="1" opacity=".55"/></svg>';
 
 // Buttons carry an accessible name, a tooltip and an optional visible label.
 function button(id, { glyph, label, text, run, always }) {
@@ -116,9 +119,12 @@ const toolGroups = [
   { id: 'measure', tools: [['measure', L('Measure')], ['pricerange', L('Price range')], ['daterange', L('Date range')]] }
 ];
 const drawingNames = Object.fromEntries([...toolGroups.flatMap(group => group.tools), ['position', L('Position')]]);
-const panels = [['watch', 'list', L('Watchlist and details')], ['alerts', 'alert', L('Alerts')], ['data', 'table', L('Data window and object tree')],
-  ['screener', 'filter', L('Screener')], ['script', 'code', L('Formulas and strategies')], ['trade', 'wallet', L('Trading')],
-  ['insights', 'bulb', L('Insights')], ['community', 'share', L('Share and community')], ['sources', 'source', L('Official sources')]];
+// Each panel: name, icon, accessible label and the short label shown on its tab.
+const panels = [['watch', 'list', L('Watchlist and details'), L('Watchlist')], ['alerts', 'alert', L('Alerts'), L('Alerts')],
+  ['data', 'table', L('Data window and object tree'), L('Data window')], ['screener', 'filter', L('Screener'), L('Screener')],
+  ['script', 'code', L('Formulas and strategies'), L('Formula editor')], ['trade', 'wallet', L('Trading'), L('Trading')],
+  ['insights', 'bulb', L('Insights'), L('Insights')], ['community', 'share', L('Share and community'), L('Share and community')],
+  ['sources', 'source', L('Official sources'), L('Official sources')]];
 const ranges = [['1D', 5, 288, L('1 day in 5 minute bars')], ['5D', 15, 480, L('5 days in 15 minute bars')], ['1M', 60, 720, L('1 month in 1 hour bars')],
   ['3M', 240, 540, L('3 months in 4 hour bars')], [L('All'), 1440, 144, L('All data in daily bars')]];
 const columns = [['symbol', L('Symbol')], ['last', L('Last')], ['change', L('Chg%')], ['week', L('1W%')], ['month', L('1M%')], ['rsi', 'RSI'], ['trend', L('vs SMA 50')]];
@@ -133,7 +139,7 @@ const paramNames = { length: L('Length'), width: L('Width'), fast: L('Fast lengt
 const densities = { compact: L('Compact'), cozy: L('Comfortable'), roomy: L('Large') };
 const crosshairs = { cross: L('Cross'), vertical: L('Vertical line only'), none: L('Hidden') };
 const themes = { auto: L('Match device'), light: L('Light'), dark: L('Dark') };
-const sides = { right: L('Right'), left: L('Left') };
+const sides = { right: L('Right'), left: L('Left'), bottom: L('Bottom') };
 const strokes = { '': L('Default'), 1: '1', 2: '2', 3: '3', 4: '4' };
 // Top bar buttons that can be hidden from Settings.
 const optional = [['compare', L('Compare symbols')], ['style', L('Chart type')], ['indicators', L('Indicators and formulas')], ['alert', L('Create alert')],
@@ -144,7 +150,7 @@ const orderKinds = { market: L('Market'), limit: L('Limit'), stop: L('Stop loss'
 const isColor = value => typeof value === 'string' && /^#[0-9a-f]{6}$/i.test(value);
 
 // State and persistence.
-const chartDefaults = () => ({ symbol: 'BTCUSDT.P', interval: 60, style: 'Candles', log: false, compare: [], indicators: [{ uid: 'volume', id: 'volume', params: { height: 18 } }] });
+const chartDefaults = () => ({ symbol: 'BTCUSDT.P', interval: 60, style: 'Candles', log: false, compare: [], indicators: [{ uid: 'volume', id: 'volume', params: { overlay: 0, height: 18 } }] });
 const defaults = () => ({
   theme: null, locale: null, look: { accent: null, up: null, down: null, density: 'cozy' }, hidden: [], panelWidth: null, layout: '1', active: 0, charts: [chartDefaults()], panel: (view?.innerWidth ?? 1200) < 760 ? null : 'watch',
   watchlist: ['BTCUSDT.P', 'ETHUSDT.P', 'BTCUSDT', 'SPY', 'QQQ', 'AAPL', 'EURUSD'], alerts: [], log: [], drawings: {}, saved: {}, tradeAccount: 'paper',
@@ -306,6 +312,7 @@ function applyLook() {
   }
   root.dataset.density = state.look.density;
   document.body.dataset.side = state.settings.panelSide;
+  $('panel-grip').setAttribute('aria-orientation', state.settings.panelSide === 'bottom' ? 'horizontal' : 'vertical');
   document.body.dataset.tools = String(state.settings.tools !== false);
   document.body.dataset.bottom = String(state.settings.bottom !== false);
   for (const id of [...optional.map(([name]) => name), ...panels.map(([name]) => 'panel-' + name)]) {
@@ -457,7 +464,7 @@ const indicatorName = indicator => indicator.id === 'formula' ? indicator.params
 function configure(chart, indicator) {
   const spec = definition(indicator.id);
   const error = h('p', { role: 'alert', class: 'error' });
-  const inputs = Object.entries(indicator.params).map(([key, value]) => {
+  const inputs = Object.entries({ ...spec.params, ...indicator.params }).map(([key, value]) => {
     const control = key === 'overlay' ? h('input', { type: 'checkbox', checked: Boolean(value) })
       : typeof spec.params[key] === 'number' ? h('input', { type: 'number', min: key === 'width' ? 0.1 : 1, max: 500, step: key === 'width' ? 0.1 : 1, value })
       : key === 'expression' ? h('textarea', { rows: 6, spellcheck: 'false', text: value }) : h('input', { type: 'text', value, spellcheck: 'false' });
@@ -697,7 +704,10 @@ function syncReplay() {
 }
 
 // Live data: started only when the visitor has turned it on.
-const liveKeys = () => new Set(charts.filter(chart => find(chart.state.symbol).live).map(chart => chart.state.symbol + '|' + chart.state.interval));
+// Streams to keep open: every live chart, plus the daily bar of each live watchlist symbol while the watchlist is showing.
+const liveKeys = () => new Set([
+  ...charts.filter(chart => find(chart.state.symbol).live).map(chart => chart.state.symbol + '|' + chart.state.interval),
+  ...(state.panel === 'watch' ? state.watchlist.filter(symbol => find(symbol)?.live).map(symbol => symbol + '|1440') : [])]);
 // Refreshes the open panel at most once a second while live prices arrive.
 function later() {
   refresh ??= setTimeout(() => {
@@ -865,7 +875,7 @@ function build() {
   const gap = () => h('span', { class: 'gap' });
   const pickSymbol = query => symbolDialog(t('Symbol search'), item => active().set({ symbol: item.symbol }), { query });
   $('top').append(
-    h('a', { class: 'brand', href: './', 'aria-label': t('Meridian home') }, h('span', { class: 'mark', text: '◈', 'aria-hidden': 'true' }),
+    h('a', { class: 'brand', href: './', 'aria-label': t('Meridian home') }, h('span', { class: 'mark', html: brandMark, 'aria-hidden': 'true' }),
       h('span', { class: 'wordmark', text: 'Meridian', 'aria-hidden': 'true' })),
     button('quick-actions', { glyph: 'search', label: t('Quick actions'), text: t('Quick actions'), run: quickActions }),
     button('symbol', { glyph: 'search', label: t('Symbol search'), text: '', always: true, run: () => pickSymbol() }),
@@ -992,7 +1002,7 @@ function build() {
       } }))) })
   );
 
-  $('rail').append(...panels.map(([name, glyph, label]) => button('panel-' + name, { glyph, label: t(label), run: () => openPanel(name) })));
+  $('rail').append(...panels.map(([name, glyph, label, short]) => button('panel-' + name, { glyph, label: t(label), text: t(short), always: true, run: () => openPanel(name) })));
   for (const section of $('panel').querySelectorAll('section[data-panel]')) {
     const header = section.querySelector('.panel-head');
     if (!header) continue;
@@ -1748,14 +1758,17 @@ function wire(pickSymbol) {
   $('draw-delete').onclick = () => active().removeSelected();
   // The side panel is resized by dragging its inner edge, or with the arrow keys when the edge has focus.
   const grip = $('panel-grip');
+  // Docked under the chart, the same stored size is the panel's height and the edge moves up and down.
+  const below = () => state.settings.panelSide === 'bottom';
   const inward = () => state.settings.panelSide === 'left' ? 1 : -1;
+  const extent = () => $('panel').getBoundingClientRect()[below() ? 'height' : 'width'];
   const resize = width => { state.panelWidth = Math.round(Math.min(720, Math.max(240, width))); };
   grip.onpointerdown = event => {
-    const start = $('panel').getBoundingClientRect().width;
-    const from = event.clientX;
+    const start = extent();
+    const from = below() ? event.clientY : event.clientX;
     try { grip.setPointerCapture?.(event.pointerId); } catch {}
     grip.onpointermove = move => {
-      resize(start + inward() * (move.clientX - from));
+      resize(start + inward() * ((below() ? move.clientY : move.clientX) - from));
       applyLook();
     };
     grip.onpointerup = () => {
@@ -1764,9 +1777,10 @@ function wire(pickSymbol) {
     };
   };
   grip.onkeydown = event => {
-    if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
+    const [less, more] = below() ? ['ArrowUp', 'ArrowDown'] : ['ArrowLeft', 'ArrowRight'];
+    if (event.key !== less && event.key !== more) return;
     event.preventDefault();
-    resize((state.panelWidth ?? ($('panel').getBoundingClientRect().width || 320)) + inward() * (event.key === 'ArrowRight' ? 24 : -24));
+    resize((state.panelWidth ?? (extent() || 320)) + inward() * (event.key === more ? 24 : -24));
     afterChange();
   };
   $('replay-pick').onclick = () => {

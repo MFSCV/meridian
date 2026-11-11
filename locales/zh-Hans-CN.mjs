@@ -67,6 +67,7 @@ export default {
   "Binance terms": "Binance 条款",
   "Binance: {0}": "Binance：{0}",
   "Bollinger Bands": "Bollinger 带",
+  "Bottom": "底部",
   "Bought {0} {1} at {2} (simulated)": "以{2}买入{0} {1}（模拟）",
   "Break-even": "保本价",
   "Brush": "画笔",

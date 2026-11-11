@@ -67,6 +67,7 @@ export default {
   "Binance terms": "Binance利用規約",
   "Binance: {0}": "Binance: {0}",
   "Bollinger Bands": "Bollinger バンド",
+  "Bottom": "下",
   "Bought {0} {1} at {2} (simulated)": "{2}で{0} {1}を買いました（模擬）",
   "Break-even": "損益分岐点",
   "Brush": "ブラシ",

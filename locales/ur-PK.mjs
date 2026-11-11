@@ -67,6 +67,7 @@ export default {
   "Binance terms": "Binance کی شرائط",
   "Binance: {0}": "Binance: {0}",
   "Bollinger Bands": "Bollinger Bands",
+  "Bottom": "نیچے",
   "Bought {0} {1} at {2} (simulated)": "{0} {1} کو {2} پر خریدا (سمیولیشن)",
   "Break-even": "بریک ایون",
   "Brush": "برش",

@@ -47,8 +47,11 @@ function distance(px, py, [x1, y1, x2, y2]) {
   return Math.hypot(px - x1 - along * dx, py - y1 - along * dy);
 }
 
-export const paneOf = indicator => indicator.id === 'formula'
+// An indicator with an "overlay" setting chooses its own place; the others use the pane their definition names.
+export const paneOf = indicator => indicator.id === 'formula' || indicator.params?.overlay !== undefined
   ? (indicator.params.overlay ? 'overlay' : 'separate') : definition(indicator.id).pane;
+// Height of a pane as a share of the standard pane; volume starts smaller.
+const paneSize = indicator => Math.min(4, Math.max(0.25, indicator.size ?? (indicator.id === 'volume' ? 0.6 : 1)));
 
 export function createChart(host, state, env) {
   const id = ++serial;
@@ -136,7 +139,7 @@ export function createChart(host, state, env) {
     const foot = 22;
     const plot = width - axis;
     const separate = state.indicators.filter(indicator => !indicator.hidden && paneOf(indicator) === 'separate');
-    const weights = separate.map(indicator => Math.min(4, Math.max(0.25, indicator.size ?? 1)));
+    const weights = separate.map(paneSize);
     const wanted = weights.reduce((sum, weight) => sum + weight, 0) * 0.21;
     const unit = (height - foot) * 0.21 * Math.min(1, 0.75 / (wanted || 1));
     const tops = [];
@@ -365,14 +368,30 @@ export function createChart(host, state, env) {
         }
       }
       if (low === Infinity) [low, high] = [0, 1];
-      const pane = spec.range ? scale(top, subH, spec.range[0], spec.range[1], false, 0.04) : scale(top + 16, subH - 20, low, high, false, 0.06);
+      // Volume bars stand on the floor of their pane.
+      const floor = plots.some(item => item.kind === 'volume');
+      if (floor) low = 0;
+      const pane = spec.range ? scale(top, subH, spec.range[0], spec.range[1], false, 0.04)
+        : floor ? scale(top + 18, subH - 18, 0, high || 1, false, 0) : scale(top + 16, subH - 20, low, high, false, 0.06);
       geo.panes.push({ top, height: subH, scale: pane, indicator, unit });
       line(0, top, width, top, colors.edge);
+      // The whole top edge of a pane is its resize handle; the short bar marks it.
+      node(base, 'rect', { x: 0, y: round(top - 4), width: plot, height: 8, fill: 'transparent', class: 'grip' });
       node(base, 'rect', { x: round(plot / 2 - 16), y: round(top - 2), width: 32, height: 4, rx: 2, fill: colors.muted, opacity: 0.55, class: 'grip' });
       for (const guide of spec.guides ?? []) line(0, pane.y(guide), plot, pane.y(guide), colors.muted, { 'stroke-dasharray': '3 4', opacity: 0.6 });
-      for (const value of spec.range ? spec.guides : [low, high]) text(plot + 5, Math.min(top + subH - 3, Math.max(top + 10, pane.y(value) + 4)), compact(value));
+      for (const value of spec.range ? spec.guides : floor ? [high] : [low, high]) text(plot + 5, Math.min(top + subH - 3, Math.max(top + 10, pane.y(value) + 4)), compact(value));
       for (const [order, item] of plots.entries()) {
-        if (item.kind === 'histogram') {
+        if (item.kind === 'volume') {
+          const parts = { up: '', down: '' };
+          const zero = pane.y(0);
+          for (let index = first; index <= last; index++) {
+            const size = Math.max(0, zero - pane.y(item.values[index] ?? 0));
+            parts[bars[index].close >= bars[index].open ? 'up' : 'down'] +=
+              'M' + round(x(index) - body / 2) + ' ' + round(zero - size) + 'h' + round(body) + 'v' + round(size) + 'h' + round(-body) + 'Z';
+          }
+          path(parts.up, { fill: colors.up, opacity: 0.6, class: 'volume' });
+          path(parts.down, { fill: colors.down, opacity: 0.6, class: 'volume' });
+        } else if (item.kind === 'histogram') {
           const parts = { up: '', down: '' };
           const zero = pane.y(0);
           for (let index = first; index <= last; index++) {

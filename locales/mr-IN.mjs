@@ -67,6 +67,7 @@ export default {
   "Binance terms": "Binance च्या अटी",
   "Binance: {0}": "Binance: {0}",
   "Bollinger Bands": "Bollinger Bands",
+  "Bottom": "खाली",
   "Bought {0} {1} at {2} (simulated)": "{0} {1} {2} ला खरेदी केले (सिम्युलेटेड)",
   "Break-even": "ब्रेक-इव्हन",
   "Brush": "ब्रश",

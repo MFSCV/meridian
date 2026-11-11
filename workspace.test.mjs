@@ -98,9 +98,10 @@ test('workspace drives charts, drawings, alerts, replay, panels and preferences 
     for (const id of ['rsi', 'macd', 'bb']) document.querySelector('[data-indicator="' + id + '"]').click();
     get('dialog-close').click();
     assert.equal(all('.legend-row').length, 6);
-    assert.equal(all('#charts .pane-title').length, 2);
+    // Volume has its own pane, next to the two studies.
+    assert.equal(all('#charts .pane-title').length, 3);
     document.querySelector('[aria-label="Remove MACD"]').click();
-    assert.equal(all('#charts .pane-title').length, 1);
+    assert.equal(all('#charts .pane-title').length, 2);
     document.querySelector('[aria-label^="Settings for Relative"]').click();
     document.querySelector('#dialog-body [data-key="length"]').value = '0';
     all('#dialog-body button').at(-1).click();
@@ -170,8 +171,8 @@ test('workspace drives charts, drawings, alerts, replay, panels and preferences 
     all('#dialog-body button').at(-1).click();
     assert.equal(drawings().at(-1).text, 'Breakout');
     get('tool-measure').click();
-    point('pointerdown', 100, 300);
-    point('pointerdown', 220, 260);
+    point('pointerdown', 100, 270);
+    point('pointerdown', 220, 230);
     assert.equal(drawings().length, 6);
     assert.match(svg().textContent, /bars/);
     get('toggle-hide').click();
@@ -280,14 +281,14 @@ test('workspace drives charts, drawings, alerts, replay, panels and preferences 
     get('tool-lines').click();
     get('tool-lines').click();
     pick('Parallel channel');
-    point('pointerdown', 150, 200);
-    point('pointerdown', 350, 150);
+    point('pointerdown', 150, 90);
+    point('pointerdown', 350, 60);
     assert.deepEqual([spy().at(-1).type, spy().at(-1).points.length], ['channel', 3]);
     get('tool-measure').click();
     get('tool-measure').click();
     pick('Price range');
-    point('pointerdown', 200, 220);
-    point('pointerdown', 200, 120);
+    point('pointerdown', 200, 100);
+    point('pointerdown', 200, 40);
     assert.equal(spy().at(-1).type, 'pricerange');
     assert.match(svg().textContent, /%\)/);
     get('remove').click();
@@ -394,7 +395,20 @@ test('workspace drives charts, drawings, alerts, replay, panels and preferences 
     all('#dialog-body button').at(-1).click();
     const curve = all('#charts svg .study').at(-1);
     assert.deepEqual([curve.getAttribute('stroke'), curve.getAttribute('stroke-width')], ['#ff0000', '3']);
+    // Volume is a pane of its own: dragging its top edge makes it taller, and a setting draws it over the price instead.
     const volumeHeight = () => Math.max(...svg().querySelector('.volume').getAttribute('d').match(/v[0-9.]+/g).map(part => Number(part.slice(1))));
+    const volume = chart().state.indicators.find(item => item.id === 'volume');
+    const panes = all('#charts .pane-title').length;
+    const edge = Number(all('#charts svg .grip')[0].getAttribute('y')) + 4;
+    const standing = volumeHeight();
+    drag(400, edge, 400, edge - 60);
+    assert.ok(volume.size > 1);
+    assert.ok(volumeHeight() > standing * 1.5);
+    assert.ok(stored().charts[0].indicators.find(item => item.id === 'volume').size > 1);
+    document.querySelector('[aria-label="Settings for Volume"]').click();
+    document.querySelector('#dialog-body [data-key="overlay"]').checked = true;
+    all('#dialog-body button').at(-1).click();
+    assert.equal(all('#charts .pane-title').length, panes - 1);
     const low = volumeHeight();
     document.querySelector('[aria-label="Settings for Volume"]').click();
     document.querySelector('#dialog-body [data-key="height"]').value = '50';
@@ -495,7 +509,9 @@ test('workspace drives charts, drawings, alerts, replay, panels and preferences 
     assert.equal(chart().bars().length, 80);
     assert.match(get('status').textContent, /Live data · Binance spot/);
     assert.match(document.querySelector('.legend .chip').textContent, /Live/);
-    assert.equal(sockets.length, 1);
+    // One stream for the chart, then one daily stream per live watchlist symbol while the watchlist is open.
+    assert.match(sockets[0].url, /btcusdt@kline_1d$/);
+    assert.equal(new Set(sockets.map(socket => socket.url)).size, sockets.length);
     get('alert').click();
     get('alert-condition').value = 'cross';
     get('alert-price').value = '200';

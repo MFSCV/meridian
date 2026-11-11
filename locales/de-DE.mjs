@@ -67,6 +67,7 @@ export default {
   "Binance terms": "Binance-Bedingungen",
   "Binance: {0}": "Binance: {0}",
   "Bollinger Bands": "Bollinger-Bänder",
+  "Bottom": "Unten",
   "Bought {0} {1} at {2} (simulated)": "{0} {1} zu {2} gekauft (simuliert)",
   "Break-even": "Break-even",
   "Brush": "Pinsel",
