@@ -244,7 +244,7 @@ try {
 } catch {}
 
 let state = load();
-await useLocale(state.locale ?? detect().tag);
+await useLocale(state.locale ?? document.documentElement.dataset.defaultLocale ?? detect().tag);
 document.documentElement.lang = locale.tag;
 document.documentElement.dir = locale.dir;
 translateTree(document.body);
