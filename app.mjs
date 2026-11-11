@@ -171,8 +171,11 @@ const isColor = value => typeof value === 'string' && /^#[0-9a-f]{6}$/i.test(val
 const defaultPvsra = () => ({ uid: 'pvsra-suite-default', id: 'pvsra-suite', params: { ...definition('pvsra-suite').params } });
 const defaultVolume = () => ({ uid: 'volume', id: 'volume', params: { ...definition('volume').params } });
 const chartDefaults = () => ({ symbol: 'BTCUSDT.P', interval: 60, style: 'Candles', log: false, compare: [], indicators: [defaultPvsra()] });
+const legacyFavoriteIntervals = [5, 15, 60, 240, 1440];
+const favoriteIntervalsVersion = 1;
 const defaults = () => ({
-  theme: null, locale: null, look: { accent: null, up: null, down: null, density: 'cozy' }, hidden: [], panelWidth: null, favoriteIntervals: [5, 15, 60, 240, 1440], layout: '1', active: 0, charts: [chartDefaults()], panel: (view?.innerWidth ?? 1200) < 760 ? null : 'watch',
+  theme: null, locale: null, look: { accent: null, up: null, down: null, density: 'cozy' }, hidden: [], panelWidth: null,
+  favoriteIntervals: [...intervals], favoriteIntervalsVersion, layout: '1', active: 0, charts: [chartDefaults()], panel: (view?.innerWidth ?? 1200) < 760 ? null : 'watch',
   watchlist: ['BTCUSDT.P', 'ETHUSDT.P', 'BTCUSDT', 'SPY', 'QQQ', 'AAPL', 'EURUSD'], watchFolders: [], watchLocations: {},
   alerts: [], log: [], drawings: {}, saved: {}, tradeAccount: 'paper',
   paper: { cash: 100000, positions: {}, orders: [], pending: [] },
@@ -284,7 +287,12 @@ function normalize(saved) {
   if (saved && typeof saved === 'object') {
     Object.assign(base, saved, { settings: { ...base.settings, ...saved.settings }, paper: { ...base.paper, ...saved.paper } });
   }
-  base.favoriteIntervals = [...new Set(list(base.favoriteIntervals).filter(validInterval))];
+  const favorites = Array.isArray(base.favoriteIntervals) ? [...new Set(base.favoriteIntervals.filter(validInterval))] : [...intervals];
+  // Upgrade the previous built-in preset once so later edits can still select the same five intervals.
+  const oldPreset = saved?.favoriteIntervalsVersion !== favoriteIntervalsVersion && favorites.length === legacyFavoriteIntervals.length &&
+    legacyFavoriteIntervals.every(minutes => favorites.includes(minutes));
+  base.favoriteIntervals = oldPreset ? [...intervals] : favorites;
+  base.favoriteIntervalsVersion = favoriteIntervalsVersion;
   base.charts = cleanCharts(base.charts);
   if (!base.charts.length) base.charts = [chartDefaults()];
   if (!Object.hasOwn(layouts, base.layout)) base.layout = '1';
@@ -1333,14 +1341,14 @@ function renderTimeframes() {
   const focused = bar.contains(document.activeElement) ? document.activeElement.id : '';
   bar.dataset.signature = signature;
   bar.replaceChildren(
+    button('manage-timeframes', { label: t('Manage favorite intervals'), text: t('Intervals'), run: timeframeDialog }),
     ...state.favoriteIntervals.map(minutes => {
       const control = button('favorite-' + minutes, {
         label: intervalLabel(minutes), text: intervalLabel(minutes), run: () => active().set({ interval: minutes })
       });
       press(control, minutes === current);
       return control;
-    }),
-    button('manage-timeframes', { label: t('Manage favorite intervals'), text: t('Intervals'), run: timeframeDialog })
+    })
   );
   if (focused) $(focused)?.focus();
 }

@@ -383,7 +383,7 @@ div.result > :first-child, .result[data-indicator] > :first-child { font-family:
   overflow-x: auto; scrollbar-width: thin; background: var(--panel); border-bottom: 1px solid var(--edge);
 }
 #timeframes button { flex: none; min-height: 32px; padding-inline: 10px; }
-#manage-timeframes { order: -1; margin-inline-end: 4px; }
+#manage-timeframes { position: sticky; inset-inline-start: 0; z-index: 1; margin-inline-end: 4px; }
 .timeframe-options { display: grid; grid-template-columns: repeat(auto-fit, minmax(86px, 1fr)); gap: 4px; }
 .timeframe-option { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 3px; }
 .timeframe-option button { padding-inline: 3px; }

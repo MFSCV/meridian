@@ -1,4 +1,4 @@
-const fields = ['theme', 'locale', 'look', 'hidden', 'panelWidth', 'favoriteIntervals', 'layout', 'active', 'charts',
+const fields = ['theme', 'locale', 'look', 'hidden', 'panelWidth', 'favoriteIntervals', 'favoriteIntervalsVersion', 'layout', 'active', 'charts',
   'panel', 'watchlist', 'watchFolders', 'watchLocations', 'alerts', 'drawings', 'saved', 'settings', 'pvsraVersion'];
 const preferences = ['tz', 'grid', 'magnet', 'keep', 'lock', 'hide', 'syncSymbol', 'syncInterval', 'syncCross',
   'live', 'feed', 'priceLine', 'legend', 'crosshair', 'drawColor', 'drawWidth', 'panelSide', 'tools', 'bottom'];
