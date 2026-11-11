@@ -143,7 +143,7 @@ const paramNames = { length: L('Length'), width: L('Width'), fast: L('Fast lengt
   both: L('Draw both sides for every vector candle'), rows: L('Rows'),
   vectors: L('Vector candles and zones'), emas: L('EMAs and cloud'), averages: L('Timeframe moving averages'),
   levels: L('Price levels'), markets: L('Market sessions'), sessionFills: L('Show session fills'), liquidations: L('Estimated liquidation levels'),
-  vwap: L('VWAP and bands'), profile: L('Volume profile'), lower: L('Lower pane'),
+  vwap: L('VWAP'), vwapBands: L('VWAP bands'), profile: L('Volume profile'), lower: L('Lower pane'),
   vwapAnchor: L('VWAP anchor'), vwapMode: L('VWAP band calculation'), hideVwapDaily: L('Hide VWAP on daily and higher intervals'),
   band1: L('VWAP band 1 multiplier'), band2: L('VWAP band 2 multiplier'), band3: L('VWAP band 3 multiplier'),
   trimZones: L('Trim zones as price fills them'), adrLength: L('Daily range lookback'), liquidationLimit: L('Maximum liquidation levels'),
@@ -151,7 +151,7 @@ const paramNames = { length: L('Length'), width: L('Width'), fast: L('Fast lengt
   historicalLevels: L('Show historical daily and weekly levels'), frankfurt: L('Show Frankfurt session') };
 // Parameters shown as a tick box instead of a number.
 const switches = new Set(['overlay', 'zones', 'wicks', 'daily', 'pivots', 'supports', 'adr', 'psy', 'weekends', 'both', ...Object.values(pvsraComponents),
-  'averages', 'hideVwapDaily', 'trimZones', 'historicalLevels', 'frankfurt', 'sessionFills']);
+  'averages', 'vwapBands', 'hideVwapDaily', 'trimZones', 'historicalLevels', 'frankfurt', 'sessionFills']);
 const bandMultipliers = new Set(['band1', 'band2', 'band3']);
 
 const densities = { compact: L('Compact'), cozy: L('Comfortable'), roomy: L('Large') };
@@ -170,12 +170,13 @@ const isColor = value => typeof value === 'string' && /^#[0-9a-f]{6}$/i.test(val
 // State and persistence.
 const defaultPvsra = () => ({ uid: 'pvsra-suite-default', id: 'pvsra-suite', params: { ...definition('pvsra-suite').params } });
 const defaultVolume = () => ({ uid: 'volume', id: 'volume', params: { ...definition('volume').params } });
-const chartDefaults = () => ({ symbol: 'BTCUSDT.P', interval: 60, style: 'Candles', log: false, compare: [], indicators: [defaultPvsra()] });
+const chartDefaults = () => ({ symbol: 'BTCUSDT.P', interval: 1, style: 'Candles', log: false, compare: [], indicators: [defaultPvsra()] });
 const legacyFavoriteIntervals = [5, 15, 60, 240, 1440];
-const favoriteIntervalsVersion = 1;
+const defaultFavoriteIntervals = intervals.filter(minutes => minutes >= 1);
+const favoriteIntervalsVersion = 2;
 const defaults = () => ({
   theme: null, locale: null, look: { accent: null, up: null, down: null, density: 'cozy' }, hidden: [], panelWidth: null,
-  favoriteIntervals: [...intervals], favoriteIntervalsVersion, layout: '1', active: 0, charts: [chartDefaults()], panel: (view?.innerWidth ?? 1200) < 760 ? null : 'watch',
+  favoriteIntervals: [...defaultFavoriteIntervals], favoriteIntervalsVersion, layout: '1', active: 0, charts: [chartDefaults()], panel: (view?.innerWidth ?? 1200) < 760 ? null : 'watch',
   watchlist: ['BTCUSDT.P', 'ETHUSDT.P', 'BTCUSDT', 'SPY', 'QQQ', 'AAPL', 'EURUSD'], watchFolders: [], watchLocations: {},
   alerts: [], log: [], drawings: {}, saved: {}, tradeAccount: 'paper',
   paper: { cash: 100000, positions: {}, orders: [], pending: [] },
@@ -199,6 +200,21 @@ function cleanWatchFolders(value) {
   }
   return [...valid.values()].filter(item => accepted.has(item.id));
 }
+function cleanIndicatorInputs(indicator) {
+  const defaults = definition(indicator.id).params;
+  const params = { ...defaults, ...indicator.params };
+  if (indicator.id !== 'pvsra-suite') return params;
+  params.averagesConfig = cleanPvsraAverages(params.averagesConfig);
+  if (indicator.params?.vwapBands === undefined && params.vwap) {
+    // The old preset drew Band 1 automatically. Keep bands enabled when their inputs or styles were customized.
+    const bandStyle = key => /^VWAP (band|upper|lower) [123]$/.test(key);
+    const customBands = [...bandMultipliers].some(key => params[key] !== defaults[key]) || params.vwapMode !== defaults.vwapMode ||
+      Object.keys(indicator.appearance?.elements ?? {}).some(bandStyle) || Object.keys(indicator.colors ?? {}).some(bandStyle);
+    params.vwapBands = Number(customBands && [...bandMultipliers].some(key => params[key] > 0));
+  }
+  return params;
+}
+
 const cleanCharts = value => list(value).filter(chart => find(chart?.symbol) && validInterval(chart.interval)).map(chart => ({
   ...chartDefaults(), ...chart, style: styles.includes(chart.style) ? chart.style : 'Candles',
   viewport: Number.isFinite(chart.viewport?.bars) && chart.viewport.bars > 0 && Number.isFinite(chart.viewport.offset) ? {
@@ -208,8 +224,7 @@ const cleanCharts = value => list(value).filter(chart => find(chart?.symbol) && 
       chart.viewport.price.high > chart.viewport.price.low ? { low: chart.viewport.price.low, high: chart.viewport.price.high } : null
   } : undefined,
   compare: list(chart.compare).filter(symbol => find(symbol) && !find(symbol).live), indicators: list(chart.indicators).filter(item => definition(item?.id)).map(item => ({
-    ...item, params: { ...definition(item.id).params, ...item.params,
-      ...(item.id === 'pvsra-suite' ? { averagesConfig: cleanPvsraAverages(item.params?.averagesConfig) } : {}) },
+    ...item, params: cleanIndicatorInputs(item),
     appearance: item.id === 'pvsra-suite' ? cleanPvsraAppearance(item.appearance) : undefined,
     size: Number.isFinite(item.size) ? Math.min(4, Math.max(0.25, item.size)) : undefined,
     scaleZoom: Number.isFinite(item.scaleZoom) ? studyScale(item.scaleZoom) : undefined,
@@ -287,11 +302,12 @@ function normalize(saved) {
   if (saved && typeof saved === 'object') {
     Object.assign(base, saved, { settings: { ...base.settings, ...saved.settings }, paper: { ...base.paper, ...saved.paper } });
   }
-  const favorites = Array.isArray(base.favoriteIntervals) ? [...new Set(base.favoriteIntervals.filter(validInterval))] : [...intervals];
-  // Upgrade the previous built-in preset once so later edits can still select the same five intervals.
-  const oldPreset = saved?.favoriteIntervalsVersion !== favoriteIntervalsVersion && favorites.length === legacyFavoriteIntervals.length &&
-    legacyFavoriteIntervals.every(minutes => favorites.includes(minutes));
-  base.favoriteIntervals = oldPreset ? [...intervals] : favorites;
+  const favorites = Array.isArray(base.favoriteIntervals) ? [...new Set(base.favoriteIntervals.filter(validInterval))] : [...defaultFavoriteIntervals];
+  const oldPreset = saved?.favoriteIntervalsVersion === 1 ? intervals
+    : saved?.favoriteIntervalsVersion === undefined ? legacyFavoriteIntervals : null;
+  // Replace matching built-in presets once. Keep favorite subsets and custom intervals.
+  const matchesOldPreset = oldPreset?.length === favorites.length && oldPreset.every(minutes => favorites.includes(minutes));
+  base.favoriteIntervals = matchesOldPreset ? [...defaultFavoriteIntervals] : favorites;
   base.favoriteIntervalsVersion = favoriteIntervalsVersion;
   base.charts = cleanCharts(base.charts);
   if (!base.charts.length) base.charts = [chartDefaults()];
@@ -788,7 +804,8 @@ function pvsraSettings(indicator, inputs) {
     [L('Price levels'), ['levels', 'daily', 'psy', 'supports', 'adrLength', 'historicalLevels']],
     [L('Market sessions'), ['markets', 'sessionFills', 'weekends', 'frankfurt']],
     [L('Estimated liquidation levels'), ['liquidations', 'both', 'liquidationLimit']],
-    [L('VWAP and bands'), ['vwap', 'vwapAnchor', 'vwapMode', 'band1', 'band2', 'band3', 'hideVwapDaily']],
+    [L('VWAP'), ['vwap', 'vwapAnchor', 'hideVwapDaily']],
+    [L('VWAP bands'), ['vwapBands', 'vwapMode', 'band1', 'band2', 'band3']],
     [L('Volume profile'), ['profile', 'profileLength', 'rows']]
   ];
   const inputByKey = new Map(inputs.map(input => [input.querySelector('[data-key]').dataset.key, input]));
@@ -825,6 +842,8 @@ function pvsraSettings(indicator, inputs) {
   const averageSlots = new Map(averages.map(({ slot, enabled }) => [slot.key, enabled]));
   const dailyLevels = new Set(['level:Daily Open', 'level:yDO', 'level:YDay Hi', 'level:YDay Lo', 'level:LWeek Hi', 'level:LWeek Lo']);
   const enabledByInputs = key => {
+    if (key === 'VWAP') return controlFor('vwap').checked;
+    if (key.startsWith('VWAP ')) return controlFor('vwapBands').checked && Number(controlFor('band' + key.at(-1)).value) > 0;
     if (key.startsWith('level:')) return controlFor('levels').checked &&
       (!dailyLevels.has(key) || controlFor('daily').checked) && (!key.startsWith('level:Psy-') || controlFor('psy').checked);
     if (key.startsWith('zone:')) return controlFor('vectors').checked && controlFor('zones').checked;

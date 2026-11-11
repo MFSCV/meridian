@@ -262,7 +262,7 @@ function lowerPane(bars, p, colors) {
 const pvsraSuite = {
   id: 'pvsra-suite', name: 'PVSRA Levels + MACD', pane: 'both', guides: [0],
   params: { vectors: 1, zones: 0, wicks: 0, limit: 500, emas: 1, averages: 0, levels: 1, markets: 1, sessionFills: 0,
-    liquidations: 0, vwap: 1, vwapAnchor: 'Session', vwapMode: 'Standard Deviation', band1: 1, band2: 0, band3: 0,
+    liquidations: 0, vwap: 1, vwapBands: 0, vwapAnchor: 'Session', vwapMode: 'Standard Deviation', band1: 1, band2: 0, band3: 0,
     hideVwapDaily: 0, profile: 1, lower: pvsraSeparateVolume, fast: 12, slow: 26, signal: 9,
     trimZones: 1, weekends: 0, daily: 1, psy: 1, supports: 0, adrLength: 14, both: 0, liquidationLimit: 60, profileLength: 300, rows: 120,
     oscillatorAverage: 'EMA', signalAverage: 'EMA', historicalLevels: 1, frankfurt: 0 },
@@ -283,7 +283,7 @@ const pvsraSuite = {
         ...(spec.id === 'liquidations' ? { rays: plot.rays.map(ray => ({ ...ray, label: '' })) } : {})
       }));
     });
-    if (p.vwap && !(p.hideVwapDaily && context.interval >= 1440)) overlays.push(...suiteVwap(bars, p));
+    if ((p.vwap || p.vwapBands) && !(p.hideVwapDaily && context.interval >= 1440)) overlays.push(...suiteVwap(bars, p));
     if (p.averages) overlays.push(...extraAverages(bars, context.interval ?? 60, p.averagesConfig));
     if (p.lower !== 'Off') {
       const colors = overlays.find(plot => plot.kind === 'barcolor')?.colors ?? pvsraFlags(bars).map(flag => vectorColors[flag]);
@@ -513,8 +513,9 @@ export function vwapBands(bars, width = 1) {
 
 function suiteVwap(bars, p) {
   const { vwap, basis } = weightedVwap(bars, p.vwapAnchor, p.vwapMode === 'Percentage');
-  const plots = [stroke('VWAP', vwap, '#2962ff')];
-  for (const [index, width] of [p.band1, p.band2, p.band3].entries()) {
+  const plots = p.vwap ? [stroke('VWAP', vwap, '#2962ff')] : [];
+  const widths = p.vwapBands ? [p.band1, p.band2, p.band3] : [];
+  for (const [index, width] of widths.entries()) {
     if (!width) continue;
     const n = index + 1;
     const { upper, lower } = vwapEnvelope(vwap, basis, width);
@@ -717,11 +718,12 @@ export const pvsraStyleGroups = [
       element('liquidation:' + side + ':' + (index + 1), (side === 'long' ? 'Long ' : 'Short ') + [25, 50, 100][index] + 'x', color, 'line', 70))),
     element('break-even', 'Break-even', '#00bcd4', 'line', 40)
   ]],
-  ['VWAP and bands', [element('VWAP', 'VWAP', '#2962ff'), ...bandColors.flatMap((color, index) => {
+  ['VWAP', [element('VWAP', 'VWAP', '#2962ff')]],
+  ['VWAP bands', bandColors.flatMap((color, index) => {
     const n = index + 1;
     return [element('VWAP upper ' + n, 'VWAP upper ' + n, color), element('VWAP lower ' + n, 'VWAP lower ' + n, color),
       element('VWAP band ' + n, 'VWAP band ' + n + ' fill', color, 'fill', 7)];
-  })]],
+  })],
   ['Volume profile', [
     element('profile:buy', 'Buy volume', '#26a69a', 'fill', 45), element('profile:sell', 'Sell volume', '#ef5350', 'fill', 45),
     ...['POC', 'VAH', 'VAL'].map(label => element('profile:' + label, label, '#8b95a6', 'level', 70)),

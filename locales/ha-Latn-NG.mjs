@@ -179,7 +179,7 @@ export default {
   "Session": "Session",
   "Timeframe moving averages": "Timeframe moving averages",
   "VWAP anchor": "VWAP anchor",
-  "VWAP and bands": "VWAP and bands",
+  "VWAP bands": "VWAP bands",
   "VWAP band 1 multiplier": "VWAP band 1 multiplier",
   "VWAP band 2 multiplier": "VWAP band 2 multiplier",
   "VWAP band 3 multiplier": "VWAP band 3 multiplier",
